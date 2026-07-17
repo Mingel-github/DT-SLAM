@@ -1,0 +1,17 @@
+build/
+lib/
+*.so
+*.o
+*.pyc
+__pycache__/
+.DS_Store
+*.swp
+*.swo
+*.out
+output/
+logs/
+
+# Large binary data — not in git
+TUM/
+*/Vocabulary/ORBvoc.txt
+*.tgz
