@@ -80,13 +80,17 @@ src/KeyFrameDatabase.cc
 src/Sim3Solver.cc
 src/Initializer.cc
 src/Viewer.cc
+src/YOLOSegment.cc
 )
+
+find_package(Threads REQUIRED)
 
 target_link_libraries(${PROJECT_NAME}
 ${OpenCV_LIBS}
 ${Pangolin_LIBRARIES}
 ${PROJECT_SOURCE_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
 ${PROJECT_SOURCE_DIR}/Thirdparty/g2o/lib/libg2o.so
+${CMAKE_THREAD_LIBS_INIT}
 )
 
 # Build examples
