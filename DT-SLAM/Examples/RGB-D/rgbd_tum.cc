@@ -74,6 +74,16 @@ int main(int argc, char **argv)
         pYOLO = new ORB_SLAM2::YOLOSegment(argv[5], 0.5f, 0.45f);
         pYOLO->Start();
         cout << "[DT-SLAM] 语义线程已启动，模型: " << argv[5] << endl;
+
+        // DT-SLAM: 预提交首帧等第1个mask就绪，防止初始化时动态特征污染地图
+        cv::Mat imFirst = cv::imread(string(argv[3]) + "/" + vstrImageFilenamesRGB[0], cv::IMREAD_UNCHANGED);
+        if (!imFirst.empty())
+        {
+            pYOLO->PushFrame(imFirst, 0);
+            while (pYOLO->GetMaskSeq() < 0)
+                usleep(5000);
+            cout << "[DT-SLAM] 首帧mask就绪，开始跟踪" << endl;
+        }
     }
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.

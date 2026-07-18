@@ -48,8 +48,7 @@ public:
     float GetInferenceMinMs() const;
     float GetInferenceMaxMs() const;
     int   GetInferenceCount() const;
-
-    int mProcessedFrames;  // 实际完成的推理帧数
+    int   GetProcessedFrames() const { return mProcessedFrames.load(); }
 
 private:
     void Run();
@@ -84,6 +83,7 @@ private:
     int mLatestMaskSeq;
     std::vector<Detection> mLatestDetections;
     std::vector<float> mInferenceTimes;  // 每帧推理耗时(ms)
+    std::atomic<int> mProcessedFrames;  // 实际完成的推理帧数（原子，无data race）
 
     std::thread mThread;
     std::atomic<bool> mRunning;

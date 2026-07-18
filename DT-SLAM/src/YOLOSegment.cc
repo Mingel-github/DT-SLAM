@@ -19,8 +19,8 @@ YOLOSegment::YOLOSegment(const std::string &modelPath,
     , mPendingSeq(-1)
     , mNewFrame(false)
     , mLatestMaskSeq(-1)
-    , mRunning(false)
     , mProcessedFrames(0)
+    , mRunning(false)
 {
     mSessionOpts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     mSessionOpts.SetIntraOpNumThreads(2);
@@ -76,7 +76,7 @@ void YOLOSegment::Stop()
                   << " min=" << mInferenceTimes[0]
                   << " max=" << mInferenceTimes[n-1]
                   << " n=" << n
-                  << " | 总计处理" << mProcessedFrames << "帧" << std::endl;
+                  << " | 总计处理" << mProcessedFrames.load() << "帧" << std::endl;
     }
 }
 
@@ -157,7 +157,7 @@ void YOLOSegment::Run()
             mLatestMaskSeq = seq;
             mLatestDetections = detections;
             mInferenceTimes.push_back(ms);
-            mProcessedFrames++;
+            mProcessedFrames.fetch_add(1);
         }
         catch (const std::exception& e)
         {
@@ -281,15 +281,21 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
         cv::Mat tmp;
         cv::exp(-logits, tmp);
         cv::Mat prob = 1.0f / (1.0f + tmp);
+        // 夹断NaN/Inf到[0,1]，防止上游数值异常污染mask
+        cv::max(prob, 0.f, prob);
+        cv::min(prob, 1.f, prob);
 
         cv::Mat maskProto = prob.reshape(1, protoH); // 160×160, 覆盖全图(640×640)
 
         // 将输入空间bbox映射到proto坐标系(160×160)，裁剪后再resize
+        // 加10% margin避免bbox裁切过紧导致mask边缘被切掉
         float ps = (float)protoW / (float)mInputShape[3]; // proto缩放比 = 160/640 = 0.25
-        int ppx = std::max(0, (int)(inBox.x * ps));
-        int ppy = std::max(0, (int)(inBox.y * ps));
-        int ppw = std::min(protoW - ppx, std::max(1, (int)(inBox.width * ps)));
-        int pph = std::min(protoH - ppy, std::max(1, (int)(inBox.height * ps)));
+        int mx = std::max(1, (int)(inBox.width  * ps * 0.10f));
+        int my = std::max(1, (int)(inBox.height * ps * 0.10f));
+        int ppx = std::max(0, (int)(inBox.x * ps) - mx);
+        int ppy = std::max(0, (int)(inBox.y * ps) - my);
+        int ppw = std::min(protoW - ppx, std::max(1, (int)(inBox.width  * ps) + 2*mx));
+        int pph = std::min(protoH - ppy, std::max(1, (int)(inBox.height * ps) + 2*my));
         cv::Mat cropped = maskProto(cv::Range(ppy, ppy+pph), cv::Range(ppx, ppx+ppw));
 
         cv::Mat maskBin;
@@ -301,6 +307,8 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
         cv::bitwise_or(maskResized, mask(box), mask(box));
     }
 
+    // DT-SLAM: 5px膨胀吸收mask边缘不精确+一帧滞后位移(~4-8px)
+    cv::dilate(mask, mask, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7)));
     return mask;
 }
 
