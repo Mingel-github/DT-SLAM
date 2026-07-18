@@ -39,11 +39,12 @@ FrameDrawer::FrameDrawer(Map* pMap):mpMap(pMap)
 cv::Mat FrameDrawer::DrawFrame()
 {
     cv::Mat im;
-    vector<cv::KeyPoint> vIniKeys; // Initialization: KeyPoints in reference frame
-    vector<int> vMatches; // Initialization: correspondeces with reference keypoints
-    vector<cv::KeyPoint> vCurrentKeys; // KeyPoints in current frame
-    vector<bool> vbVO, vbMap; // Tracked MapPoints in current frame
-    int state; // Tracking state
+    vector<cv::KeyPoint> vIniKeys;
+    vector<int> vMatches;
+    vector<cv::KeyPoint> vCurrentKeys;
+    vector<bool> vbVO, vbMap;
+    cv::Mat mask;
+    int state;
 
     //Copy variables within scoped mutex
     {
@@ -53,6 +54,8 @@ cv::Mat FrameDrawer::DrawFrame()
             mState=Tracking::NO_IMAGES_YET;
 
         mIm.copyTo(im);
+        if(!mImMask.empty())
+            mImMask.copyTo(mask);
 
         if(mState==Tracking::NOT_INITIALIZED)
         {
@@ -70,13 +73,21 @@ cv::Mat FrameDrawer::DrawFrame()
         {
             vCurrentKeys = mvCurrentKeys;
         }
-    } // destroy scoped mutex -> release mutex
+    }
 
-    if(im.channels()<3) //this should be always true
+    if(im.channels()<3)
         cvtColor(im,im,CV_GRAY2BGR);
 
+    // DT-SLAM: 动态mask红色半透明叠加（透明度85%/15%，隐约可见不遮挡画面）
+    if(!mask.empty())
+    {
+        cv::Mat overlay = im.clone();
+        overlay.setTo(cv::Scalar(0,0,255), mask);
+        cv::addWeighted(im, 0.85, overlay, 0.15, 0, im);
+    }
+
     //Draw
-    if(state==Tracking::NOT_INITIALIZED) //INITIALIZING
+    if(state==Tracking::NOT_INITIALIZED)
     {
         for(unsigned int i=0; i<vMatches.size(); i++)
         {
@@ -85,9 +96,9 @@ cv::Mat FrameDrawer::DrawFrame()
                 cv::line(im,vIniKeys[i].pt,vCurrentKeys[vMatches[i]].pt,
                         cv::Scalar(0,255,0));
             }
-        }        
+        }
     }
-    else if(state==Tracking::OK) //TRACKING
+    else if(state==Tracking::OK)
     {
         mnTracked=0;
         mnTrackedVO=0;
@@ -103,19 +114,22 @@ cv::Mat FrameDrawer::DrawFrame()
                 pt2.x=vCurrentKeys[i].pt.x+r;
                 pt2.y=vCurrentKeys[i].pt.y+r;
 
-                // This is a match to a MapPoint in the map
+                // DT-SLAM: mask上的特征点用红色标记（被过滤/在动态区域）
+                bool onMask = !mask.empty() &&
+                    (int)vCurrentKeys[i].pt.x>=0 && (int)vCurrentKeys[i].pt.x<mask.cols &&
+                    (int)vCurrentKeys[i].pt.y>=0 && (int)vCurrentKeys[i].pt.y<mask.rows &&
+                    mask.at<uchar>((int)vCurrentKeys[i].pt.y, (int)vCurrentKeys[i].pt.x) != 0;
+
+                cv::Scalar color = onMask ? cv::Scalar(0,0,255) :   // 红=动态区域
+                                  vbMap[i] ? cv::Scalar(0,255,0) :  // 绿=地图点匹配
+                                             cv::Scalar(255,0,0);   // 蓝=VO匹配
+
+                cv::rectangle(im,pt1,pt2,color);
+                cv::circle(im,vCurrentKeys[i].pt,2,color,-1);
                 if(vbMap[i])
-                {
-                    cv::rectangle(im,pt1,pt2,cv::Scalar(0,255,0));
-                    cv::circle(im,vCurrentKeys[i].pt,2,cv::Scalar(0,255,0),-1);
                     mnTracked++;
-                }
-                else // This is match to a "visual odometry" MapPoint created in the last frame
-                {
-                    cv::rectangle(im,pt1,pt2,cv::Scalar(255,0,0));
-                    cv::circle(im,vCurrentKeys[i].pt,2,cv::Scalar(255,0,0),-1);
+                else
                     mnTrackedVO++;
-                }
             }
         }
     }
@@ -163,6 +177,15 @@ void FrameDrawer::DrawTextInfo(cv::Mat &im, int nState, cv::Mat &imText)
     imText.rowRange(im.rows,imText.rows) = cv::Mat::zeros(textSize.height+10,im.cols,im.type());
     cv::putText(imText,s.str(),cv::Point(5,imText.rows-5),cv::FONT_HERSHEY_PLAIN,1,cv::Scalar(255,255,255),1,8);
 
+}
+
+void FrameDrawer::UpdateMask(const cv::Mat &mask)
+{
+    unique_lock<mutex> lock(mMutex);
+    if(!mask.empty())
+        mask.copyTo(mImMask);
+    else
+        mImMask.release();
 }
 
 void FrameDrawer::Update(Tracking *pTracker)

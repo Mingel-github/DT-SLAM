@@ -243,6 +243,9 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
         }
     }
 
+    // DT-SLAM: 传递mask给FrameDrawer用于Pangolin可视化
+    mpFrameDrawer->UpdateMask(mask);
+
     Track();
 
     return mCurrentFrame.mTcw.clone();

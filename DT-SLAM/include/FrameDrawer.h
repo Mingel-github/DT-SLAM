@@ -45,6 +45,9 @@ public:
     // Update info from the last processed frame.
     void Update(Tracking *pTracker);
 
+    // DT-SLAM: 更新动态mask用于可视化
+    void UpdateMask(const cv::Mat &mask);
+
     // Draw last processed frame.
     cv::Mat DrawFrame();
 
@@ -54,6 +57,7 @@ protected:
 
     // Info of the frame to be drawn
     cv::Mat mIm;
+    cv::Mat mImMask; // DT-SLAM: 动态mask可视化
     int N;
     vector<cv::KeyPoint> mvCurrentKeys;
     vector<bool> mvbMap, mvbVO;
