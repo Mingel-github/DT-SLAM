@@ -28,6 +28,7 @@
 #include<opencv2/core/core.hpp>
 
 #include<System.h>
+#include<YOLOSegment.h>
 
 using namespace std;
 
@@ -36,9 +37,11 @@ void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageF
 
 int main(int argc, char **argv)
 {
-    if(argc != 5)
+    // DT-SLAM: 支持可选第5参数(ONNX模型路径)启用语义动态过滤
+    if(argc != 5 && argc != 6)
     {
-        cerr << endl << "Usage: ./rgbd_tum path_to_vocabulary path_to_settings path_to_sequence path_to_association" << endl;
+        cerr << endl << "Usage: ./rgbd_tum path_to_vocabulary path_to_settings path_to_sequence path_to_association [path_to_onnx_model]" << endl;
+        cerr << "  ONNX model: YOLOv8n-seg ONNX,启用动态过滤; 不提供=纯几何baseline" << endl;
         return 1;
     }
 
@@ -60,6 +63,16 @@ int main(int argc, char **argv)
     {
         cerr << endl << "Different number of images for rgb and depth." << endl;
         return 1;
+    }
+
+    // DT-SLAM: 初始化语义线程（如果提供了ONNX模型）
+    ORB_SLAM2::YOLOSegment* pYOLO = nullptr;
+    int nMaskReady = 0;  // 第一个mask就绪前的帧计数
+    if(argc == 6)
+    {
+        pYOLO = new ORB_SLAM2::YOLOSegment(argv[5], 0.5f, 0.45f);
+        pYOLO->Start();
+        cout << "[DT-SLAM] 语义线程已启动，模型: " << argv[5] << endl;
     }
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
@@ -89,6 +102,16 @@ int main(int argc, char **argv)
             return 1;
         }
 
+        // DT-SLAM: 异步语义 — 提交当前帧→取上一帧mask
+        cv::Mat mask;
+        if(pYOLO)
+        {
+            pYOLO->PushFrame(imRGB);
+            mask = pYOLO->GetLatestMask();
+            if(!mask.empty())
+                nMaskReady++;
+        }
+
 #ifdef COMPILEDWITHC11
         std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
 #else
@@ -96,7 +119,7 @@ int main(int argc, char **argv)
 #endif
 
         // Pass the image to the SLAM system
-        SLAM.TrackRGBD(imRGB,imD,tframe);
+        SLAM.TrackRGBD(imRGB,imD,mask,tframe);
 
 #ifdef COMPILEDWITHC11
         std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
@@ -117,6 +140,14 @@ int main(int argc, char **argv)
 
         if(ttrack<T)
             usleep((T-ttrack)*1e6);
+    }
+
+    // DT-SLAM: 停止语义线程
+    if(pYOLO)
+    {
+        pYOLO->Stop();
+        cout << "[DT-SLAM] mask就绪帧数: " << nMaskReady << "/" << nImages << endl;
+        delete pYOLO;
     }
 
     // Stop all threads
