@@ -206,7 +206,7 @@ cv::Mat Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRe
 }
 
 
-cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const double &timestamp)
+cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const cv::Mat &mask, const double &timestamp)
 {
     mImGray = imRGB;
     cv::Mat imDepth = imD;
@@ -230,6 +230,18 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const d
         imDepth.convertTo(imDepth,CV_32F,mDepthMapFactor);
 
     mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
+
+    // DT-SLAM: 根据动态mask过滤特征点，mask非零(255)=动态区域，设mvbOutlier=true跳过匹配
+    if(!mask.empty())
+    {
+        for(size_t i=0; i<mCurrentFrame.N; i++)
+        {
+            int u = (int)mCurrentFrame.mvKeys[i].pt.x;
+            int v = (int)mCurrentFrame.mvKeys[i].pt.y;
+            if(u>=0 && u<mask.cols && v>=0 && v<mask.rows && mask.at<uchar>(v,u)!=0)
+                mCurrentFrame.mvbOutlier[i] = true;
+        }
+    }
 
     Track();
 
