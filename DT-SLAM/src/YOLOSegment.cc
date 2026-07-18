@@ -1,7 +1,5 @@
 /**
- * DT-SLAM: YOLOv8-seg ONNX 异步语义线程实现
- * 推理引擎: ONNX Runtime C++ API
- * 预处理/后处理: OpenCV
+ * DT-SLAM: YOLOv8-seg ONNX Runtime 异步语义线程实现
  */
 
 #include "YOLOSegment.h"
@@ -20,50 +18,35 @@ YOLOSegment::YOLOSegment(const std::string &modelPath,
     , mNmsThreshold(nmsThreshold)
     , mNewFrame(false)
     , mRunning(false)
-    , mInputW(640)
-    , mInputH(640)
 {
-    // 配置CPU推理
-    mSessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    mSessionOptions.SetIntraOpNumThreads(2);
+    mSessionOpts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    mSessionOpts.SetIntraOpNumThreads(2);
 
-    // 加载ONNX模型
-    mSession.reset(new Ort::Session(mEnv, modelPath.c_str(), mSessionOptions));
+    mSession.reset(new Ort::Session(mEnv, modelPath.c_str(), mSessionOpts));
 
-    // 分配输入输出名称内存（ORT需要C字符串指针，类成员持有std::string保证生命周期）
-    Ort::AllocatorWithDefaultOptions allocator;
-    size_t numInputs = mSession->GetInputCount();
-    for (size_t i = 0; i < numInputs; i++)
+    // 从模型读取输入尺寸，不再硬编码
+    for (size_t i = 0; i < mSession->GetInputCount(); i++)
     {
-        char* name = mSession->GetInputNameAllocated(i, allocator).release();
-        mInputNames.push_back(name);
-        auto typeInfo = mSession->GetInputTypeInfo(i);
-        auto tensorInfo = typeInfo.GetTensorTypeAndShapeInfo();
-        mInputShape = tensorInfo.GetShape();
+        auto name = mSession->GetInputNameAllocated(i, mAlloc);
+        mInputNames.push_back(name.get());
+        auto shape = mSession->GetInputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape();
+        mInputShape = shape; // [1, 3, H, W]
     }
-    size_t numOutputs = mSession->GetOutputCount();
-    for (size_t i = 0; i < numOutputs; i++)
+    if (mInputShape.size() >= 4)
+        std::cout << "[YOLO] 输入尺寸: " << mInputShape[2] << "x" << mInputShape[3] << std::endl;
+
+    for (size_t i = 0; i < mSession->GetOutputCount(); i++)
     {
-        char* name = mSession->GetOutputNameAllocated(i, allocator).release();
-        mOutputNames.push_back(name);
+        auto name = mSession->GetOutputNameAllocated(i, mAlloc);
+        mOutputNames.push_back(name.get());
     }
 
-    // 允许动态batch: 输入shape[0]可以是任意值
-    if (!mInputShape.empty())
-        mInputShape[0] = 1;
-
-    std::cout << "[YOLO] ONNX Runtime模型加载: " << modelPath
-              << " (inputs:" << numInputs << " outputs:" << numOutputs << ")" << std::endl;
+    std::cout << "[YOLO] ONNX模型加载: " << modelPath << std::endl;
 }
 
 YOLOSegment::~YOLOSegment()
 {
     Stop();
-    // 释放输入输出名称
-    for (auto& name : mInputNames)
-        free(const_cast<char*>(name));
-    for (auto& name : mOutputNames)
-        free(const_cast<char*>(name));
 }
 
 void YOLOSegment::Start()
@@ -78,7 +61,6 @@ void YOLOSegment::Stop()
     mRunning = false;
     if (mThread.joinable())
         mThread.join();
-    std::cout << "[YOLO] 推理线程已停止" << std::endl;
 }
 
 void YOLOSegment::PushFrame(const cv::Mat &imRGB)
@@ -93,9 +75,7 @@ cv::Mat YOLOSegment::GetLatestMask()
     std::lock_guard<std::mutex> lock(mMutexMask);
     if (mLatestMask.empty())
         return cv::Mat();
-    cv::Mat result;
-    mLatestMask.copyTo(result);
-    return result;
+    return mLatestMask.clone();
 }
 
 void YOLOSegment::Run()
@@ -111,12 +91,30 @@ void YOLOSegment::Run()
                 continue;
             }
             mNewFrame = false;
-            mPendingFrame.copyTo(frame);
+            frame = mPendingFrame.clone();
         }
 
         try
         {
-            cv::Mat mask = Segment(frame);
+            float scale; int padX, padY;
+            cv::Mat blob = Preprocess(frame, scale, padX, padY);
+
+            // 前向推理
+            Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+            Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
+                memInfo, (float*)blob.ptr<float>(), blob.total(),
+                mInputShape.data(), mInputShape.size());
+
+            std::vector<const char*> inNames, outNames;
+            for (auto& n : mInputNames)  inNames.push_back(n.c_str());
+            for (auto& n : mOutputNames) outNames.push_back(n.c_str());
+
+            auto outputs = mSession->Run(Ort::RunOptions{nullptr},
+                                          inNames.data(), &inputTensor, 1,
+                                          outNames.data(), outNames.size());
+
+            cv::Mat mask = Postprocess(frame, outputs, scale, padX, padY);
+
             std::lock_guard<std::mutex> lock(mMutexMask);
             mask.copyTo(mLatestMask);
         }
@@ -127,144 +125,116 @@ void YOLOSegment::Run()
     }
 }
 
-cv::Mat YOLOSegment::Segment(const cv::Mat &imRGB)
+// ---- Preprocess: letterbox缩放+padding+blob ----
+cv::Mat YOLOSegment::Preprocess(const cv::Mat &imRGB, float &scale, int &padX, int &padY)
 {
-    int imgW = imRGB.cols;
-    int imgH = imRGB.rows;
-    cv::Mat mask = cv::Mat::zeros(imgH, imgW, CV_8U);
+    int imgW = imRGB.cols, imgH = imRGB.rows;
+    int netW = (int)mInputShape[3], netH = (int)mInputShape[2];
 
-    // ---- 预处理：letterbox + blob ----
-    float scale = std::min((float)mInputW / imgW, (float)mInputH / imgH);
-    int newW = (int)(imgW * scale);
-    int newH = (int)(imgH * scale);
-    int padX = (mInputW - newW) / 2;
-    int padY = (mInputH - newH) / 2;
+    scale = std::min((float)netW / imgW, (float)netH / imgH);
+    int newW = (int)(imgW * scale), newH = (int)(imgH * scale);
+    padX = (netW - newW) / 2;
+    padY = (netH - newH) / 2;
 
     cv::Mat resized, padded;
     cv::resize(imRGB, resized, cv::Size(newW, newH));
-    cv::copyMakeBorder(resized, padded, padY, mInputH - newH - padY,
-                       padX, mInputW - newW - padX, cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
+    cv::copyMakeBorder(resized, padded, padY, netH - newH - padY,
+                       padX, netW - newW - padX, cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
 
     cv::Mat blob;
-    cv::dnn::blobFromImage(padded, blob, 1.0 / 255.0, cv::Size(mInputW, mInputH),
-                           cv::Scalar(), true, false); // swapRB: BGR→RGB, 无crop
+    cv::dnn::blobFromImage(padded, blob, 1.0/255.0, cv::Size(netW, netH),
+                           cv::Scalar(), true, false);
+    return blob;
+}
 
-    // ---- 前向推理 ----
-    Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    std::vector<int64_t> inputShape = {1, 3, mInputH, mInputW};
-    Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-        memInfo, (float*)blob.ptr<float>(), blob.total(), inputShape.data(), inputShape.size());
-
-    auto outputs = mSession->Run(Ort::RunOptions{nullptr},
-                                  mInputNames.data(), &inputTensor, 1,
-                                  mOutputNames.data(), mOutputNames.size());
+// ---- Postprocess: NMS筛选 + mask解码 ----
+cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &outputs,
+                                  float scale, int padX, int padY)
+{
+    int imgW = imRGB.cols, imgH = imRGB.rows;
+    cv::Mat mask = cv::Mat::zeros(imgH, imgW, CV_8U);
 
     if (outputs.size() < 2)
         return mask;
 
-    // output0: [1, 116, 8400] — 检测头
-    //   col[0:4]=bbox(cx,cy,w,h), col[4:84]=80类score, col[84:116]=32 mask coefficients
-    // output1: [1, 32, 160, 160] — 原型mask
-    float* detData = outputs[0].GetTensorMutableData<float>();
+    float* detData  = outputs[0].GetTensorMutableData<float>();
     float* protoData = outputs[1].GetTensorMutableData<float>();
+    auto detShape   = outputs[0].GetTensorTypeAndShapeInfo().GetShape();   // [1,116,8400]
+    auto protoShape = outputs[1].GetTensorTypeAndShapeInfo().GetShape();   // [1,32,160,160]
 
-    auto detInfo = outputs[0].GetTensorTypeAndShapeInfo();
-    auto protoInfo = outputs[1].GetTensorTypeAndShapeInfo();
-    auto detShape = detInfo.GetShape();      // [1, 116, 8400]
-    auto protoShape = protoInfo.GetShape();  // [1, 32, 160, 160]
+    const int nAnchors = (int)detShape[2];
+    const int detCh   = (int)detShape[1];  // 4+80+32=116
+    const int nCls    = 80;
+    const int maskDim = 32;
+    const int protoH  = (int)protoShape[2];
+    const int protoW  = (int)protoShape[3];
 
-    const int numAnchors = (int)detShape[2];
-    const int detChannels = (int)detShape[1];  // 4 + 80 + 32 = 116
-    const int numClasses = 80;
-    const int maskCoeffDim = 32;
-    const int protoH = (int)protoShape[2];
-    const int protoW = (int)protoShape[3];
+    // 转置 [nCh, nAnchors] → [nAnchors, nCh]
+    cv::Mat detMat(nAnchors, detCh, CV_32F);
+    for (int j = 0; j < detCh; j++)
+        for (int i = 0; i < nAnchors; i++)
+            detMat.at<float>(i, j) = detData[j * nAnchors + i];
 
-    // ---- 后处理 ----
-    // 转置 [116, 8400] → [8400, 116]
-    cv::Mat detMat(numAnchors, detChannels, CV_32F);
-    for (int j = 0; j < detChannels; j++)
-        for (int i = 0; i < numAnchors; i++)
-            detMat.at<float>(i, j) = detData[j * numAnchors + i];
-
-    cv::Mat bboxes    = detMat.colRange(0, 4);
-    cv::Mat scores    = detMat.colRange(4, 4 + numClasses);
-    cv::Mat maskCoeffs = detMat.colRange(4 + numClasses, detChannels);
-
-    // 筛选person类(class=0)
+    // 筛选person类，转换坐标
     std::vector<cv::Rect> boxes;
-    std::vector<float> confidences;
-    std::vector<int> keptIndices;
+    std::vector<float> confs;
+    std::vector<int> keptIdx;
 
-    for (int i = 0; i < numAnchors; i++)
+    for (int i = 0; i < nAnchors; i++)
     {
-        float personScore = scores.at<float>(i, 0);
-        if (personScore < mConfThreshold)
-            continue;
+        float score = detMat.at<float>(i, 4); // class 0 = person
+        if (score < mConfThreshold) continue;
 
-        float cx = bboxes.at<float>(i, 0);
-        float cy = bboxes.at<float>(i, 1);
-        float w  = bboxes.at<float>(i, 2);
-        float h  = bboxes.at<float>(i, 3);
+        float cx = detMat.at<float>(i, 0), cy = detMat.at<float>(i, 1);
+        float w  = detMat.at<float>(i, 2), h  = detMat.at<float>(i, 3);
 
-        float x1 = (cx - w / 2 - padX) / scale;
-        float y1 = (cy - h / 2 - padY) / scale;
-        float x2 = (cx + w / 2 - padX) / scale;
-        float y2 = (cy + h / 2 - padY) / scale;
+        float x1 = (cx - w/2 - padX) / scale, y1 = (cy - h/2 - padY) / scale;
+        float x2 = (cx + w/2 - padX) / scale, y2 = (cy + h/2 - padY) / scale;
+        x1 = std::max(0.f, std::min(x1, (float)imgW));
+        y1 = std::max(0.f, std::min(y1, (float)imgH));
+        x2 = std::max(0.f, std::min(x2, (float)imgW));
+        y2 = std::max(0.f, std::min(y2, (float)imgH));
 
-        x1 = std::max(0.0f, std::min(x1, (float)imgW));
-        y1 = std::max(0.0f, std::min(y1, (float)imgH));
-        x2 = std::max(0.0f, std::min(x2, (float)imgW));
-        y2 = std::max(0.0f, std::min(y2, (float)imgH));
-
-        int bw = (int)(x2 - x1);
-        int bh = (int)(y2 - y1);
-        if (bw <= 0 || bh <= 0)
-            continue;
+        int bw = (int)(x2-x1), bh = (int)(y2-y1);
+        if (bw <= 0 || bh <= 0) continue;
 
         boxes.push_back(cv::Rect((int)x1, (int)y1, bw, bh));
-        confidences.push_back(personScore);
-        keptIndices.push_back(i);
+        confs.push_back(score);
+        keptIdx.push_back(i);
     }
 
-    // NMS
-    std::vector<int> nmsIndices;
-    cv::dnn::NMSBoxes(boxes, confidences, mConfThreshold, mNmsThreshold, nmsIndices);
+    std::vector<int> nmsIdx;
+    cv::dnn::NMSBoxes(boxes, confs, mConfThreshold, mNmsThreshold, nmsIdx);
+    if (nmsIdx.empty()) return mask;
 
-    if (nmsIndices.empty())
-        return mask;
-
-    // ---- Mask解码 ----
-    // 原型mask: [1, 32, 160, 160] → [32, 25600]
-    cv::Mat protosFlat(protoH * protoW, maskCoeffDim, CV_32F);
-    for (int c = 0; c < maskCoeffDim; c++)
-    {
+    // ---- Mask解码：mask_coeffs @ protos → sigmoid → 二值化 ----
+    cv::Mat protosFlat(protoH*protoW, maskDim, CV_32F);
+    for (int c = 0; c < maskDim; c++)
         for (int y = 0; y < protoH; y++)
             for (int x = 0; x < protoW; x++)
-                protosFlat.at<float>(y * protoW + x, c) = protoData[c * protoH * protoW + y * protoW + x];
-    }
+                protosFlat.at<float>(y*protoW+x, c) = protoData[c*protoH*protoW + y*protoW + x];
 
-    for (int idx : nmsIndices)
+    for (int idx : nmsIdx)
     {
-        int origIdx = keptIndices[idx];
+        int orig = keptIdx[idx];
         cv::Rect box = boxes[idx];
+        cv::Mat coeffs = detMat.row(orig).colRange(4+nCls, detCh); // 1×32
 
-        cv::Mat coeffs = maskCoeffs.row(origIdx);      // 1×32
-        cv::Mat maskFlat = coeffs * protosFlat.t();     // 1×25600
+        cv::Mat logits = coeffs * protosFlat.t(); // 1×25600
 
-        cv::Mat sigmoidMask(1, protoH * protoW, CV_32F);
-        for (int i = 0; i < protoH * protoW; i++)
-            sigmoidMask.at<float>(0, i) = 1.0f / (1.0f + std::exp(-maskFlat.at<float>(0, i)));
+        // sigmoid: 1/(1+exp(-x)) — 向量化
+        cv::Mat tmp;
+        cv::exp(-logits, tmp);
+        cv::Mat prob = 1.0f / (1.0f + tmp);
 
-        cv::Mat maskProto = sigmoidMask.reshape(1, protoH);
+        cv::Mat maskProto = prob.reshape(1, protoH); // 160×160
         cv::Mat maskBin;
         cv::threshold(maskProto, maskBin, 0.5, 255, cv::THRESH_BINARY);
         maskBin.convertTo(maskBin, CV_8U);
 
         cv::Mat maskResized;
         cv::resize(maskBin, maskResized, cv::Size(box.width, box.height));
-        cv::Mat roi = mask(box);
-        cv::bitwise_or(maskResized, roi, roi);
+        cv::bitwise_or(maskResized, mask(box), mask(box));
     }
 
     return mask;
