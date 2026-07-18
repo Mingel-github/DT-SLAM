@@ -68,6 +68,7 @@ int main(int argc, char **argv)
     // DT-SLAM: 初始化语义线程
     ORB_SLAM2::YOLOSegment* pYOLO = nullptr;
     int nMaskReady = 0;
+    vector<int> vMaskAges; // mask年龄统计（帧延时）
     if(argc == 6 && string(argv[5]).find(".onnx") != string::npos)
     {
         pYOLO = new ORB_SLAM2::YOLOSegment(argv[5], 0.5f, 0.45f);
@@ -106,11 +107,15 @@ int main(int argc, char **argv)
         cv::Mat mask;
         if(pYOLO)
         {
-            pYOLO->PushFrame(imRGB);
+            pYOLO->PushFrame(imRGB, ni);
             mask = pYOLO->GetLatestMask();
             SLAM.UpdateDetections(pYOLO->GetDetections());
             if(!mask.empty())
+            {
                 nMaskReady++;
+                int age = ni - pYOLO->GetMaskSeq();
+                if (age >= 0) vMaskAges.push_back(age);
+            }
         }
 
 #ifdef COMPILEDWITHC11
@@ -143,11 +148,19 @@ int main(int argc, char **argv)
             usleep((T-ttrack)*1e6);
     }
 
-    // DT-SLAM: 停止语义线程
+    // DT-SLAM: 停止语义线程 + 输出性能统计
     if(pYOLO)
     {
         pYOLO->Stop();
         cout << "[DT-SLAM] mask就绪: " << nMaskReady << "/" << nImages << endl;
+        if (!vMaskAges.empty())
+        {
+            std::sort(vMaskAges.begin(), vMaskAges.end());
+            int am = vMaskAges[vMaskAges.size()/2];
+            int aMax = *std::max_element(vMaskAges.begin(), vMaskAges.end());
+            cout << "[DT-SLAM] mask年龄(帧): median=" << am
+                      << " max=" << aMax << " n=" << vMaskAges.size() << endl;
+        }
         delete pYOLO;
     }
 

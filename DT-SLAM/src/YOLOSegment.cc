@@ -16,8 +16,11 @@ YOLOSegment::YOLOSegment(const std::string &modelPath,
     : mEnv(ORT_LOGGING_LEVEL_WARNING, "YOLOSegment")
     , mConfThreshold(confThreshold)
     , mNmsThreshold(nmsThreshold)
+    , mPendingSeq(-1)
     , mNewFrame(false)
+    , mLatestMaskSeq(-1)
     , mRunning(false)
+    , mProcessedFrames(0)
 {
     mSessionOpts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     mSessionOpts.SetIntraOpNumThreads(2);
@@ -61,12 +64,27 @@ void YOLOSegment::Stop()
     mRunning = false;
     if (mThread.joinable())
         mThread.join();
+
+    if (!mInferenceTimes.empty())
+    {
+        std::sort(mInferenceTimes.begin(), mInferenceTimes.end());
+        float sum = 0;
+        for (float t : mInferenceTimes) sum += t;
+        int n = (int)mInferenceTimes.size();
+        std::cout << "[YOLO] 推理耗时(ms): mean=" << sum/n
+                  << " median=" << mInferenceTimes[n/2]
+                  << " min=" << mInferenceTimes[0]
+                  << " max=" << mInferenceTimes[n-1]
+                  << " n=" << n
+                  << " | 总计处理" << mProcessedFrames << "帧" << std::endl;
+    }
 }
 
-void YOLOSegment::PushFrame(const cv::Mat &imRGB)
+void YOLOSegment::PushFrame(const cv::Mat &imRGB, int seq)
 {
     std::lock_guard<std::mutex> lock(mMutexFrame);
     imRGB.copyTo(mPendingFrame);
+    mPendingSeq = seq;
     mNewFrame = true;
 }
 
@@ -76,6 +94,12 @@ cv::Mat YOLOSegment::GetLatestMask()
     if (mLatestMask.empty())
         return cv::Mat();
     return mLatestMask.clone();
+}
+
+int YOLOSegment::GetMaskSeq()
+{
+    std::lock_guard<std::mutex> lock(mMutexResult);
+    return mLatestMaskSeq;
 }
 
 std::vector<Detection> YOLOSegment::GetDetections()
@@ -89,6 +113,7 @@ void YOLOSegment::Run()
     while (mRunning)
     {
         cv::Mat frame;
+        int seq;
         {
             std::lock_guard<std::mutex> lock(mMutexFrame);
             if (!mNewFrame || mPendingFrame.empty())
@@ -98,14 +123,16 @@ void YOLOSegment::Run()
             }
             mNewFrame = false;
             frame = mPendingFrame.clone();
+            seq = mPendingSeq;
         }
 
         try
         {
+            auto t1 = std::chrono::steady_clock::now();
+
             float scale; int padX, padY;
             cv::Mat blob = Preprocess(frame, scale, padX, padY);
 
-            // 前向推理
             Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
             Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
                 memInfo, (float*)blob.ptr<float>(), blob.total(),
@@ -122,9 +149,15 @@ void YOLOSegment::Run()
             std::vector<Detection> detections;
             cv::Mat mask = Postprocess(frame, outputs, scale, padX, padY, detections);
 
+            auto t2 = std::chrono::steady_clock::now();
+            float ms = std::chrono::duration<float, std::milli>(t2 - t1).count();
+
             std::lock_guard<std::mutex> lock(mMutexResult);
             mask.copyTo(mLatestMask);
+            mLatestMaskSeq = seq;
             mLatestDetections = detections;
+            mInferenceTimes.push_back(ms);
+            mProcessedFrames++;
         }
         catch (const std::exception& e)
         {
@@ -269,6 +302,38 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
     }
 
     return mask;
+}
+
+float YOLOSegment::GetInferenceAvgMs() const
+{
+    if (mInferenceTimes.empty()) return 0;
+    float s = 0; for (float t : mInferenceTimes) s += t;
+    return s / mInferenceTimes.size();
+}
+
+float YOLOSegment::GetInferenceMedianMs() const
+{
+    if (mInferenceTimes.empty()) return 0;
+    std::vector<float> sorted = mInferenceTimes;
+    std::sort(sorted.begin(), sorted.end());
+    return sorted[sorted.size()/2];
+}
+
+float YOLOSegment::GetInferenceMinMs() const
+{
+    if (mInferenceTimes.empty()) return 0;
+    return *std::min_element(mInferenceTimes.begin(), mInferenceTimes.end());
+}
+
+float YOLOSegment::GetInferenceMaxMs() const
+{
+    if (mInferenceTimes.empty()) return 0;
+    return *std::max_element(mInferenceTimes.begin(), mInferenceTimes.end());
+}
+
+int YOLOSegment::GetInferenceCount() const
+{
+    return (int)mInferenceTimes.size();
 }
 
 } // namespace ORB_SLAM2

@@ -36,10 +36,20 @@ public:
     void Start();
     void Stop();
 
-    // Tracking线程调用：提交新帧（非阻塞深拷贝），取最新结果（异步一帧滞后）
-    void PushFrame(const cv::Mat &imRGB);
+    // Tracking线程调用：提交新帧（非阻塞深拷贝，带帧序号），取最新结果（异步一帧滞后）
+    void PushFrame(const cv::Mat &imRGB, int seq);
     cv::Mat GetLatestMask();
+    int GetMaskSeq();              // 返回mask对应帧序号（-1=暂无）
     std::vector<Detection> GetDetections();
+
+    // 推理耗时统计，Stop()后有效
+    float GetInferenceAvgMs() const;
+    float GetInferenceMedianMs() const;
+    float GetInferenceMinMs() const;
+    float GetInferenceMaxMs() const;
+    int   GetInferenceCount() const;
+
+    int mProcessedFrames;  // 实际完成的推理帧数
 
 private:
     void Run();
@@ -66,11 +76,14 @@ private:
     // 线程安全buffer
     std::mutex mMutexFrame;
     cv::Mat mPendingFrame;
+    int mPendingSeq;
     bool mNewFrame;
 
     std::mutex mMutexResult;
     cv::Mat mLatestMask;
+    int mLatestMaskSeq;
     std::vector<Detection> mLatestDetections;
+    std::vector<float> mInferenceTimes;  // 每帧推理耗时(ms)
 
     std::thread mThread;
     std::atomic<bool> mRunning;
