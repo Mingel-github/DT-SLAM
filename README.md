@@ -4,15 +4,15 @@ Dynamic SLAM system based on ORB-SLAM2, using a loosely-coupled dual-track archi
 
 ## Components
 
-| Directory | Purpose |
-|-----------|---------|
-| `DT-SLAM/` | Main development target — ORB-SLAM2 + dynamic filtering |
-| `ORB_SLAM2/` | Original ORB-SLAM2 (pure geometry baseline) |
-| `DynaSLAM/` | Reference implementation (Mask R-CNN + geometry, BertaBescos 2018) |
-| `ORB_SLAM3/` | Reference (visual-inertial, not primary) |
-| `pangolin_install/` | Pangolin visualization library |
-| `TUM/` | TUM RGB-D dynamic sequences (fr3) |
-| `results/` | Experiment outputs |
+| Directory           | Purpose                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| `DT-SLAM/`          | Main development target — ORB-SLAM2 + dynamic filtering            |
+| `ORB_SLAM2/`        | Original ORB-SLAM2 (pure geometry baseline)                        |
+| `DynaSLAM/`         | Reference implementation (Mask R-CNN + geometry, BertaBescos 2018) |
+| `ORB_SLAM3/`        | Reference (visual-inertial, not primary)                           |
+| `pangolin_install/` | Pangolin visualization library                                     |
+| `TUM/`              | TUM RGB-D dynamic sequences (fr3)                                  |
+| `results/`          | Experiment outputs                                                 |
 
 ## TUM Sequences
 

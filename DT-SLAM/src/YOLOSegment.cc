@@ -138,12 +138,14 @@ cv::Mat YOLOSegment::Segment(const cv::Mat &imRGB)
     const int protoH = protoOut.size[2];
     const int protoW = protoOut.size[3];
 
-    // 转置为 [8400, 116]
+    // 转置为 [8400, 116] — detOut是4D [1, 116, 8400]，用ptr访问
     cv::Mat detMat(numAnchors, 4 + numClasses + maskCoeffDim, CV_32F);
-    for (int i = 0; i < numAnchors; i++)
+    int detChannels = detOut.size[1];
+    for (int j = 0; j < detChannels; j++)
     {
-        for (int j = 0; j < detOut.size[1]; j++)
-            detMat.at<float>(i, j) = detOut.at<float>(0, j, i);
+        float* detData = detOut.ptr<float>(0, j);
+        for (int i = 0; i < numAnchors; i++)
+            detMat.at<float>(i, j) = detData[i];
     }
 
     // 提取各分量
@@ -198,12 +200,15 @@ cv::Mat YOLOSegment::Segment(const cv::Mat &imRGB)
         return mask;
 
     // ---- Mask解码 ----
-    // 原型mask: [32, 160, 160] → [32, 25600]
+    // 原型mask: [1, 32, 160, 160] → [32, 25600]
     cv::Mat protosFlat(protoH * protoW, maskCoeffDim, CV_32F);
     for (int c = 0; c < maskCoeffDim; c++)
+    {
+        float* protoData = protoOut.ptr<float>(0, c); // 第0样本, 第c通道
         for (int y = 0; y < protoH; y++)
             for (int x = 0; x < protoW; x++)
-                protosFlat.at<float>(y * protoW + x, c) = protoOut.at<float>(0, c, y, x);
+                protosFlat.at<float>(y * protoW + x, c) = protoData[y * protoW + x];
+    }
 
     for (int idx : nmsIndices)
     {
