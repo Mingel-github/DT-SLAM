@@ -28,6 +28,7 @@
 
 #include "Tracking.h"
 #include "FrameDrawer.h"
+#include "YOLOSegment.h"
 #include "MapDrawer.h"
 #include "Map.h"
 #include "LocalMapping.h"
@@ -116,6 +117,9 @@ public:
     // TODO: Save/Load functions
     // SaveMap(const string &filename);
     // LoadMap(const string &filename);
+
+    // DT-SLAM: 传递YOLO检测结果给FrameDrawer用于Pangolin可视化
+    void UpdateDetections(const std::vector<Detection> &detections);
 
     // Information from most recent processed frame
     // You can call this right after TrackMonocular (or stereo or RGBD)

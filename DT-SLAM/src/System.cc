@@ -472,6 +472,11 @@ void System::SaveTrajectoryKITTI(const string &filename)
     cout << endl << "trajectory saved!" << endl;
 }
 
+void System::UpdateDetections(const std::vector<Detection> &detections)
+{
+    mpFrameDrawer->UpdateDetections(detections);
+}
+
 int System::GetTrackingState()
 {
     unique_lock<mutex> lock(mMutexState);

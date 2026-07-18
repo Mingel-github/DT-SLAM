@@ -24,6 +24,7 @@
 #include "Tracking.h"
 #include "MapPoint.h"
 #include "Map.h"
+#include "YOLOSegment.h"
 
 #include<opencv2/core/core.hpp>
 #include<opencv2/features2d/features2d.hpp>
@@ -45,8 +46,9 @@ public:
     // Update info from the last processed frame.
     void Update(Tracking *pTracker);
 
-    // DT-SLAM: 更新动态mask用于可视化
+    // DT-SLAM: 更新动态mask和YOLO检测结果用于可视化
     void UpdateMask(const cv::Mat &mask);
+    void UpdateDetections(const std::vector<Detection> &detections);
 
     // Draw last processed frame.
     cv::Mat DrawFrame();
@@ -58,6 +60,7 @@ protected:
     // Info of the frame to be drawn
     cv::Mat mIm;
     cv::Mat mImMask; // DT-SLAM: 动态mask可视化
+    std::vector<Detection> mDetections; // DT-SLAM: YOLO检测结果
     int N;
     vector<cv::KeyPoint> mvCurrentKeys;
     vector<bool> mvbMap, mvbVO;

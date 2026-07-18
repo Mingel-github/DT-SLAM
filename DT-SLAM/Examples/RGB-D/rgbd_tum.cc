@@ -102,12 +102,13 @@ int main(int argc, char **argv)
             return 1;
         }
 
-        // DT-SLAM: 异步语义 — 提交当前帧，取上一帧YOLO mask
+        // DT-SLAM: 异步语义 — 提交当前帧，取上一帧YOLO结果
         cv::Mat mask;
         if(pYOLO)
         {
             pYOLO->PushFrame(imRGB);
             mask = pYOLO->GetLatestMask();
+            SLAM.UpdateDetections(pYOLO->GetDetections());
             if(!mask.empty())
                 nMaskReady++;
         }

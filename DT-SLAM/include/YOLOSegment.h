@@ -18,6 +18,13 @@
 namespace ORB_SLAM2
 {
 
+// 单个检测结果，用于Pangolin调试可视化
+struct Detection
+{
+    cv::Rect box;
+    float confidence;
+};
+
 class YOLOSegment
 {
 public:
@@ -29,18 +36,20 @@ public:
     void Start();
     void Stop();
 
-    // Tracking线程调用：提交新帧（非阻塞深拷贝），取最新mask（异步一帧滞后）
+    // Tracking线程调用：提交新帧（非阻塞深拷贝），取最新结果（异步一帧滞后）
     void PushFrame(const cv::Mat &imRGB);
     cv::Mat GetLatestMask();
+    std::vector<Detection> GetDetections();
 
 private:
     void Run();
 
     // 预处理：letterbox→blob
     cv::Mat Preprocess(const cv::Mat &imRGB, float &scale, int &padX, int &padY);
-    // NMS筛选person检测框 + mask系数解码
+    // NMS筛选person检测框 + mask解码，返回mask和检测列表
     cv::Mat Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &outputs,
-                        float scale, int padX, int padY);
+                        float scale, int padX, int padY,
+                        std::vector<Detection> &detections);
 
     // ONNX Runtime
     Ort::Env mEnv;
@@ -59,8 +68,9 @@ private:
     cv::Mat mPendingFrame;
     bool mNewFrame;
 
-    std::mutex mMutexMask;
+    std::mutex mMutexResult;
     cv::Mat mLatestMask;
+    std::vector<Detection> mLatestDetections;
 
     std::thread mThread;
     std::atomic<bool> mRunning;

@@ -72,10 +72,16 @@ void YOLOSegment::PushFrame(const cv::Mat &imRGB)
 
 cv::Mat YOLOSegment::GetLatestMask()
 {
-    std::lock_guard<std::mutex> lock(mMutexMask);
+    std::lock_guard<std::mutex> lock(mMutexResult);
     if (mLatestMask.empty())
         return cv::Mat();
     return mLatestMask.clone();
+}
+
+std::vector<Detection> YOLOSegment::GetDetections()
+{
+    std::lock_guard<std::mutex> lock(mMutexResult);
+    return mLatestDetections;
 }
 
 void YOLOSegment::Run()
@@ -113,10 +119,12 @@ void YOLOSegment::Run()
                                           inNames.data(), &inputTensor, 1,
                                           outNames.data(), outNames.size());
 
-            cv::Mat mask = Postprocess(frame, outputs, scale, padX, padY);
+            std::vector<Detection> detections;
+            cv::Mat mask = Postprocess(frame, outputs, scale, padX, padY, detections);
 
-            std::lock_guard<std::mutex> lock(mMutexMask);
+            std::lock_guard<std::mutex> lock(mMutexResult);
             mask.copyTo(mLatestMask);
+            mLatestDetections = detections;
         }
         catch (const std::exception& e)
         {
@@ -149,7 +157,8 @@ cv::Mat YOLOSegment::Preprocess(const cv::Mat &imRGB, float &scale, int &padX, i
 
 // ---- Postprocess: NMS筛选 + mask解码 ----
 cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &outputs,
-                                  float scale, int padX, int padY)
+                                  float scale, int padX, int padY,
+                                  std::vector<Detection> &detections)
 {
     int imgW = imRGB.cols, imgH = imRGB.rows;
     cv::Mat mask = cv::Mat::zeros(imgH, imgW, CV_8U);
@@ -205,6 +214,12 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
 
     std::vector<int> nmsIdx;
     cv::dnn::NMSBoxes(boxes, confs, mConfThreshold, mNmsThreshold, nmsIdx);
+
+    // 保存NMS后的检测结果，用于Pangolin可视化
+    detections.clear();
+    for (int idx : nmsIdx)
+        detections.push_back({boxes[idx], confs[idx]});
+
     if (nmsIdx.empty()) return mask;
 
     // ---- Mask解码：mask_coeffs @ protos → sigmoid → 二值化 ----

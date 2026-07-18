@@ -134,6 +134,20 @@ cv::Mat FrameDrawer::DrawFrame()
         }
     }
 
+    // DT-SLAM: 画YOLO检测框+置信度
+    std::vector<Detection> dets;
+    {
+        unique_lock<mutex> lock(mMutex);
+        dets = mDetections;
+    }
+    for (const auto& d : dets)
+    {
+        cv::rectangle(im, d.box, cv::Scalar(0,255,0), 2);
+        std::string label = cv::format("person %.2f", d.confidence);
+        cv::putText(im, label, cv::Point(d.box.x, d.box.y - 5),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,0), 1);
+    }
+
     cv::Mat imWithInfo;
     DrawTextInfo(im,state, imWithInfo);
 
@@ -186,6 +200,12 @@ void FrameDrawer::UpdateMask(const cv::Mat &mask)
         mask.copyTo(mImMask);
     else
         mImMask.release();
+}
+
+void FrameDrawer::UpdateDetections(const std::vector<Detection> &detections)
+{
+    unique_lock<mutex> lock(mMutex);
+    mDetections = detections;
 }
 
 void FrameDrawer::Update(Tracking *pTracker)
