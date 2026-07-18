@@ -28,7 +28,7 @@
 #include<opencv2/core/core.hpp>
 
 #include<System.h>
-#include<YOLOSegment.h>
+//#include<YOLOSegment.h>  // TODO: ONNX Runtime headers TBD
 
 using namespace std;
 
@@ -65,18 +65,20 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // DT-SLAM: 初始化语义线程（如果提供了ONNX模型）
+    // DT-SLAM: mask离线/在线模式
+    int nMaskReady = 0;
+#if 0  // TODO: ONNX Runtime headers TBD, 当前使用离线PNG mask模式
     ORB_SLAM2::YOLOSegment* pYOLO = nullptr;
-    int nMaskReady = 0;  // 第一个mask就绪前的帧计数
-    if(argc == 6)
+    if(argc == 6 && string(argv[5]).find(".onnx") != string::npos)
     {
         pYOLO = new ORB_SLAM2::YOLOSegment(argv[5], 0.5f, 0.45f);
         pYOLO->Start();
         cout << "[DT-SLAM] 语义线程已启动，模型: " << argv[5] << endl;
     }
+#endif
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::RGBD,true);
+    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::RGBD,true); // 开启可视化
 
     // Vector for tracking time statistics
     vector<float> vTimesTrack;
@@ -102,14 +104,24 @@ int main(int argc, char **argv)
             return 1;
         }
 
-        // DT-SLAM: 异步语义 — 提交当前帧→取上一帧mask
+        // DT-SLAM: 读取预计算的mask PNG
         cv::Mat mask;
-        if(pYOLO)
+        if(argc == 6)
         {
-            pYOLO->PushFrame(imRGB);
-            mask = pYOLO->GetLatestMask();
+            char maskPath[512];
+            snprintf(maskPath, sizeof(maskPath), "%s/%06d.png", argv[5], ni);
+            mask = cv::imread(maskPath, cv::IMREAD_GRAYSCALE);
             if(!mask.empty())
+            {
                 nMaskReady++;
+                // mask红色半透明叠加到RGB，存盘用于可视化检查
+                cv::Mat debug;
+                imRGB.copyTo(debug);
+                debug.setTo(cv::Scalar(0,0,255), mask);
+                cv::addWeighted(imRGB, 0.6, debug, 0.4, 0, debug);
+                snprintf(maskPath, sizeof(maskPath), "/tmp/dtslam_viz/%06d.png", ni);
+                cv::imwrite(maskPath, debug);
+            }
         }
 
 #ifdef COMPILEDWITHC11
@@ -142,13 +154,9 @@ int main(int argc, char **argv)
             usleep((T-ttrack)*1e6);
     }
 
-    // DT-SLAM: 停止语义线程
-    if(pYOLO)
-    {
-        pYOLO->Stop();
+    // DT-SLAM: mask统计
+    if(argc == 6)
         cout << "[DT-SLAM] mask就绪帧数: " << nMaskReady << "/" << nImages << endl;
-        delete pYOLO;
-    }
 
     // Stop all threads
     SLAM.Shutdown();

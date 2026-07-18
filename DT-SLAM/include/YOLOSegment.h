@@ -1,16 +1,19 @@
 /**
  * DT-SLAM: YOLOv8-seg ONNX 异步语义线程
  * 独立线程运行实例分割，Tracking通过GetLatestMask()取上一帧结果（异步一帧滞后）
+ * 推理引擎: ONNX Runtime C++ API（替换OpenCV DNN，兼容YOLOv8 ONNX算子）
  */
 
 #ifndef YOLOSEGMENT_H
 #define YOLOSEGMENT_H
 
 #include <opencv2/core/core.hpp>
-#include <opencv2/dnn.hpp>
+#include <onnxruntime_cxx_api.h>
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <vector>
+#include <string>
 
 namespace ORB_SLAM2
 {
@@ -42,8 +45,13 @@ private:
     // 同步推理：预处理→前向→后处理→返回person类合并mask
     cv::Mat Segment(const cv::Mat &imRGB);
 
-    // ONNX模型
-    cv::dnn::Net mNet;
+    // ONNX Runtime
+    Ort::Env mEnv;
+    Ort::SessionOptions mSessionOptions;
+    std::unique_ptr<Ort::Session> mSession;
+    std::vector<const char*> mInputNames;
+    std::vector<const char*> mOutputNames;
+    std::vector<int64_t> mInputShape;
     int mInputW, mInputH;
 
     // 阈值参数

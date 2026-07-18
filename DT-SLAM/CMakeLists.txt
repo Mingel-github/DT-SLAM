@@ -70,7 +70,7 @@ src/KeyFrameDatabase.cc
 src/Sim3Solver.cc
 src/Initializer.cc
 src/Viewer.cc
-src/YOLOSegment.cc
+#src/YOLOSegment.cc  # ONNX Runtime headers TBD
 )
 
 find_package(Threads REQUIRED)
