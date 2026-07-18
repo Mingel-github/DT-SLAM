@@ -184,8 +184,9 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
         for (int i = 0; i < nAnchors; i++)
             detMat.at<float>(i, j) = detData[j * nAnchors + i];
 
-    // 筛选person类，转换坐标
-    std::vector<cv::Rect> boxes;
+    // 筛选person类，转换坐标。同时保存输入空间bbox用于proto裁剪
+    std::vector<cv::Rect> boxes;       // 原图坐标
+    std::vector<cv::Rect> inputBoxes;  // 输入空间坐标(640×640, 用于proto裁剪)
     std::vector<float> confs;
     std::vector<int> keptIdx;
 
@@ -197,8 +198,13 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
         float cx = detMat.at<float>(i, 0), cy = detMat.at<float>(i, 1);
         float w  = detMat.at<float>(i, 2), h  = detMat.at<float>(i, 3);
 
-        float x1 = (cx - w/2 - padX) / scale, y1 = (cy - h/2 - padY) / scale;
-        float x2 = (cx + w/2 - padX) / scale, y2 = (cy + h/2 - padY) / scale;
+        // 输入空间坐标(含letterbox padding)
+        float ix1 = cx - w/2, iy1 = cy - h/2;
+        float ix2 = cx + w/2, iy2 = cy + h/2;
+
+        // 原图坐标(去掉padding+缩放)
+        float x1 = (ix1 - padX) / scale, y1 = (iy1 - padY) / scale;
+        float x2 = (ix2 - padX) / scale, y2 = (iy2 - padY) / scale;
         x1 = std::max(0.f, std::min(x1, (float)imgW));
         y1 = std::max(0.f, std::min(y1, (float)imgH));
         x2 = std::max(0.f, std::min(x2, (float)imgW));
@@ -208,6 +214,7 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
         if (bw <= 0 || bh <= 0) continue;
 
         boxes.push_back(cv::Rect((int)x1, (int)y1, bw, bh));
+        inputBoxes.push_back(cv::Rect((int)ix1, (int)iy1, (int)(ix2-ix1), (int)(iy2-iy1)));
         confs.push_back(score);
         keptIdx.push_back(i);
     }
@@ -233,18 +240,27 @@ cv::Mat YOLOSegment::Postprocess(const cv::Mat &imRGB, std::vector<Ort::Value> &
     {
         int orig = keptIdx[idx];
         cv::Rect box = boxes[idx];
+        cv::Rect inBox = inputBoxes[idx]; // 输入空间bbox，用于proto裁剪
         cv::Mat coeffs = detMat.row(orig).colRange(4+nCls, detCh); // 1×32
 
         cv::Mat logits = coeffs * protosFlat.t(); // 1×25600
 
-        // sigmoid: 1/(1+exp(-x)) — 向量化
         cv::Mat tmp;
         cv::exp(-logits, tmp);
         cv::Mat prob = 1.0f / (1.0f + tmp);
 
-        cv::Mat maskProto = prob.reshape(1, protoH); // 160×160
+        cv::Mat maskProto = prob.reshape(1, protoH); // 160×160, 覆盖全图(640×640)
+
+        // 将输入空间bbox映射到proto坐标系(160×160)，裁剪后再resize
+        float ps = (float)protoW / (float)mInputShape[3]; // proto缩放比 = 160/640 = 0.25
+        int ppx = std::max(0, (int)(inBox.x * ps));
+        int ppy = std::max(0, (int)(inBox.y * ps));
+        int ppw = std::min(protoW - ppx, std::max(1, (int)(inBox.width * ps)));
+        int pph = std::min(protoH - ppy, std::max(1, (int)(inBox.height * ps)));
+        cv::Mat cropped = maskProto(cv::Range(ppy, ppy+pph), cv::Range(ppx, ppx+ppw));
+
         cv::Mat maskBin;
-        cv::threshold(maskProto, maskBin, 0.5, 255, cv::THRESH_BINARY);
+        cv::threshold(cropped, maskBin, 0.5, 255, cv::THRESH_BINARY);
         maskBin.convertTo(maskBin, CV_8U);
 
         cv::Mat maskResized;
