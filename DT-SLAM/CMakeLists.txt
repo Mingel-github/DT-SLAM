@@ -44,6 +44,7 @@ find_package(Pangolin REQUIRED)
 include_directories(
 ${PROJECT_SOURCE_DIR}
 ${PROJECT_SOURCE_DIR}/include
+${PROJECT_SOURCE_DIR}/thirdparty/onnxruntime/include
 ${EIGEN3_INCLUDE_DIR}
 ${Pangolin_INCLUDE_DIRS}
 )
@@ -70,7 +71,7 @@ src/KeyFrameDatabase.cc
 src/Sim3Solver.cc
 src/Initializer.cc
 src/Viewer.cc
-#src/YOLOSegment.cc  # ONNX Runtime headers TBD
+src/YOLOSegment.cc
 )
 
 find_package(Threads REQUIRED)
@@ -81,6 +82,7 @@ ${Pangolin_LIBRARIES}
 ${PROJECT_SOURCE_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
 ${PROJECT_SOURCE_DIR}/Thirdparty/g2o/lib/libg2o.so
 ${CMAKE_THREAD_LIBS_INIT}
+${PROJECT_SOURCE_DIR}/thirdparty/onnxruntime/lib/libonnxruntime.so
 )
 
 # Build examples
