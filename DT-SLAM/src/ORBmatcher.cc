@@ -84,6 +84,9 @@ int ORBmatcher::SearchByProjection(Frame &F, const vector<MapPoint*> &vpMapPoint
         {
             const size_t idx = *vit;
 
+            if(idx<F.mvbDynamic.size() && F.mvbDynamic[idx])
+                continue;
+
             if(F.mvpMapPoints[idx])
                 if(F.mvpMapPoints[idx]->Observations()>0)
                     continue;
@@ -188,6 +191,9 @@ int ORBmatcher::SearchByBoW(KeyFrame* pKF,Frame &F, vector<MapPoint*> &vpMapPoin
             {
                 const unsigned int realIdxKF = vIndicesKF[iKF];
 
+                if(realIdxKF<pKF->mvbDynamic.size() && pKF->mvbDynamic[realIdxKF])
+                    continue;
+
                 MapPoint* pMP = vpMapPointsKF[realIdxKF];
 
                 if(!pMP)
@@ -205,6 +211,9 @@ int ORBmatcher::SearchByBoW(KeyFrame* pKF,Frame &F, vector<MapPoint*> &vpMapPoin
                 for(size_t iF=0; iF<vIndicesF.size(); iF++)
                 {
                     const unsigned int realIdxF = vIndicesF[iF];
+
+                    if(realIdxF<F.mvbDynamic.size() && F.mvbDynamic[realIdxF])
+                        continue;
 
                     if(vpMapPointMatches[realIdxF])
                         continue;
@@ -695,6 +704,9 @@ int ORBmatcher::SearchForTriangulation(KeyFrame *pKF1, KeyFrame *pKF2, cv::Mat F
             for(size_t i1=0, iend1=f1it->second.size(); i1<iend1; i1++)
             {
                 const size_t idx1 = f1it->second[i1];
+
+                if(idx1<pKF1->mvbDynamic.size() && pKF1->mvbDynamic[idx1])
+                    continue;
                 
                 MapPoint* pMP1 = pKF1->GetMapPoint(idx1);
                 
@@ -718,6 +730,9 @@ int ORBmatcher::SearchForTriangulation(KeyFrame *pKF1, KeyFrame *pKF2, cv::Mat F
                 for(size_t i2=0, iend2=f2it->second.size(); i2<iend2; i2++)
                 {
                     size_t idx2 = f2it->second[i2];
+
+                    if(idx2<pKF2->mvbDynamic.size() && pKF2->mvbDynamic[idx2])
+                        continue;
                     
                     MapPoint* pMP2 = pKF2->GetMapPoint(idx2);
                     
@@ -1350,6 +1365,9 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, 
 
     for(int i=0; i<LastFrame.N; i++)
     {
+        if(i<static_cast<int>(LastFrame.mvbDynamic.size()) && LastFrame.mvbDynamic[i])
+            continue;
+
         MapPoint* pMP = LastFrame.mvpMapPoints[i];
 
         if(pMP)
@@ -1400,6 +1418,10 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, 
                 for(vector<size_t>::const_iterator vit=vIndices2.begin(), vend=vIndices2.end(); vit!=vend; vit++)
                 {
                     const size_t i2 = *vit;
+
+                    if(i2<CurrentFrame.mvbDynamic.size() && CurrentFrame.mvbDynamic[i2])
+                        continue;
+
                     if(CurrentFrame.mvpMapPoints[i2])
                         if(CurrentFrame.mvpMapPoints[i2]->Observations()>0)
                             continue;
@@ -1487,6 +1509,9 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, KeyFrame *pKF, const set
 
     for(size_t i=0, iend=vpMPs.size(); i<iend; i++)
     {
+        if(i<pKF->mvbDynamic.size() && pKF->mvbDynamic[i])
+            continue;
+
         MapPoint* pMP = vpMPs[i];
 
         if(pMP)
@@ -1538,6 +1563,10 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, KeyFrame *pKF, const set
                 for(vector<size_t>::const_iterator vit=vIndices2.begin(); vit!=vIndices2.end(); vit++)
                 {
                     const size_t i2 = *vit;
+
+                    if(i2<CurrentFrame.mvbDynamic.size() && CurrentFrame.mvbDynamic[i2])
+                        continue;
+
                     if(CurrentFrame.mvpMapPoints[i2])
                         continue;
 

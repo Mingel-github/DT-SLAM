@@ -35,6 +35,25 @@ using namespace std;
 void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageFilenamesRGB,
                 vector<string> &vstrImageFilenamesD, vector<double> &vTimestamps);
 
+bool WaitForMask(ORB_SLAM2::YOLOSegment* pYOLO, const int seq, cv::Mat &mask,
+                 const int timeoutMs = 30000)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while(std::chrono::steady_clock::now()<deadline)
+    {
+        const int maskSeq = pYOLO->GetMaskSeq();
+        if(maskSeq==seq)
+        {
+            mask = pYOLO->GetLatestMask();
+            return !mask.empty();
+        }
+        if(maskSeq>seq)
+            return false;
+        usleep(2000);
+    }
+    return false;
+}
+
 int main(int argc, char **argv)
 {
     // DT-SLAM: 支持可选第5参数(ONNX模型路径)启用语义动态过滤
@@ -75,13 +94,20 @@ int main(int argc, char **argv)
         pYOLO->Start();
         cout << "[DT-SLAM] 语义线程已启动，模型: " << argv[5] << endl;
 
-        // DT-SLAM: 预提交首帧等第1个mask就绪，防止初始化时动态特征污染地图
+        // Precompute the first exact-frame mask while the SLAM system has not
+        // started yet. The main loop reuses this result for sequence 0.
         cv::Mat imFirst = cv::imread(string(argv[3]) + "/" + vstrImageFilenamesRGB[0], cv::IMREAD_UNCHANGED);
         if (!imFirst.empty())
         {
             pYOLO->PushFrame(imFirst, 0);
-            while (pYOLO->GetMaskSeq() < 0)
-                usleep(5000);
+            cv::Mat firstMask;
+            if(!WaitForMask(pYOLO,0,firstMask))
+            {
+                cerr << "[DT-SLAM] Failed to obtain the semantic mask for frame 0" << endl;
+                pYOLO->Stop();
+                delete pYOLO;
+                return 1;
+            }
             cout << "[DT-SLAM] 首帧mask就绪，开始跟踪" << endl;
         }
     }
@@ -113,19 +139,27 @@ int main(int argc, char **argv)
             return 1;
         }
 
-        // DT-SLAM: 异步语义 — 提交当前帧，取上一帧YOLO结果
+        // Phase 0 semantic baseline: every RGB frame is paired with the mask
+        // carrying the same sequence number. The worker remains separate, but
+        // tracking never consumes a stale mask.
         cv::Mat mask;
         if(pYOLO)
         {
-            pYOLO->PushFrame(imRGB, ni);
-            mask = pYOLO->GetLatestMask();
-            SLAM.UpdateDetections(pYOLO->GetDetections());
-            if(!mask.empty())
+            if(pYOLO->GetMaskSeq()!=ni)
+                pYOLO->PushFrame(imRGB, ni);
+
+            if(!WaitForMask(pYOLO,ni,mask))
             {
-                nMaskReady++;
-                int age = ni - pYOLO->GetMaskSeq();
-                if (age >= 0) vMaskAges.push_back(age);
+                cerr << "[DT-SLAM] Failed to obtain the semantic mask for frame " << ni << endl;
+                pYOLO->Stop();
+                delete pYOLO;
+                SLAM.Shutdown();
+                return 1;
             }
+
+            SLAM.UpdateDetections(pYOLO->GetDetections());
+            nMaskReady++;
+            vMaskAges.push_back(ni-pYOLO->GetMaskSeq());
         }
 
 #ifdef COMPILEDWITHC11

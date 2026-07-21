@@ -141,6 +141,10 @@ protected:
     bool TrackLocalMap();
     void SearchLocalPoints();
 
+    // Semantic dynamic observations are kept separate from optimizer outliers.
+    void UpdateDynamicFeaturesFromMask(Frame &frame, const cv::Mat &mask);
+    int RemoveDynamicAssociations(Frame &frame);
+
     bool NeedNewKeyFrame();
     void CreateNewKeyFrame();
 

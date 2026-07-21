@@ -166,6 +166,11 @@ public:
     const std::vector<float> mvDepth; // negative value for monocular points
     const cv::Mat mDescriptors;
 
+    // Per-feature dynamic state copied from the source Frame. This is used only
+    // as a map-admission guard; optimization outliers remain a Frame concept.
+    const std::vector<std::uint8_t> mvbSemanticDynamic;
+    const std::vector<std::uint8_t> mvbDynamic;
+
     //BoW
     DBoW2::BowVector mBowVec;
     DBoW2::FeatureVector mFeatVec;

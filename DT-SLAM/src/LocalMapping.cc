@@ -289,6 +289,12 @@ void LocalMapping::CreateNewMapPoints()
             const int &idx1 = vMatchedIndices[ikp].first;
             const int &idx2 = vMatchedIndices[ikp].second;
 
+            // Front-end map-admission guard: semantic dynamic observations must
+            // never create a persistent MapPoint.
+            if((idx1<static_cast<int>(mpCurrentKeyFrame->mvbDynamic.size()) && mpCurrentKeyFrame->mvbDynamic[idx1]) ||
+               (idx2<static_cast<int>(pKF2->mvbDynamic.size()) && pKF2->mvbDynamic[idx2]))
+                continue;
+
             const cv::KeyPoint &kp1 = mpCurrentKeyFrame->mvKeysUn[idx1];
             const float kp1_ur=mpCurrentKeyFrame->mvuRight[idx1];
             bool bStereo1 = kp1_ur>=0;

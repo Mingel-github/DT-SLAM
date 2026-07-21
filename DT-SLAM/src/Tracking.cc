@@ -33,6 +33,8 @@
 #include"Initializer.h"
 
 #include"Optimizer.h"
+
+#include <stdexcept>
 #include"PnPsolver.h"
 
 #include<iostream>
@@ -231,24 +233,58 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
 
     mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
 
-    // DT-SLAM: 根据动态mask过滤特征点，mask非零(255)=动态区域，设mvbOutlier=true跳过匹配
+    cv::Mat semanticMask;
     if(!mask.empty())
     {
-        for(size_t i=0; i<mCurrentFrame.N; i++)
-        {
-            int u = (int)mCurrentFrame.mvKeys[i].pt.x;
-            int v = (int)mCurrentFrame.mvKeys[i].pt.y;
-            if(u>=0 && u<mask.cols && v>=0 && v<mask.rows && mask.at<uchar>(v,u)!=0)
-                mCurrentFrame.mvbOutlier[i] = true;
-        }
+        if(mask.type()!=CV_8UC1 || mask.size()!=mImGray.size())
+            throw std::invalid_argument("RGB-D semantic mask must be CV_8UC1 and match the RGB image size");
+
+        cv::compare(mask,0,semanticMask,cv::CMP_NE);
     }
+    UpdateDynamicFeaturesFromMask(mCurrentFrame,semanticMask);
 
     // DT-SLAM: 传递mask和检测列表给FrameDrawer用于Pangolin可视化
-    mpFrameDrawer->UpdateMask(mask);
+    mpFrameDrawer->UpdateMask(mCurrentFrame.mSemanticMask);
 
     Track();
 
     return mCurrentFrame.mTcw.clone();
+}
+
+void Tracking::UpdateDynamicFeaturesFromMask(Frame &frame, const cv::Mat &mask)
+{
+    frame.mSemanticMask = mask.empty() ? cv::Mat() : mask.clone();
+    frame.mvbSemanticDynamic.assign(frame.N,0);
+    frame.mvbDynamic.assign(frame.N,0);
+
+    if(mask.empty())
+        return;
+
+    for(int i=0; i<frame.N; i++)
+    {
+        const int u = static_cast<int>(frame.mvKeys[i].pt.x);
+        const int v = static_cast<int>(frame.mvKeys[i].pt.y);
+        if(u>=0 && u<mask.cols && v>=0 && v<mask.rows && mask.at<uchar>(v,u)!=0)
+        {
+            frame.mvbSemanticDynamic[i] = 1;
+            frame.mvbDynamic[i] = 1;
+        }
+    }
+}
+
+int Tracking::RemoveDynamicAssociations(Frame &frame)
+{
+    int removed = 0;
+    const size_t count = std::min(frame.mvpMapPoints.size(),frame.mvbDynamic.size());
+    for(size_t i=0; i<count; i++)
+    {
+        if(frame.mvbDynamic[i] && frame.mvpMapPoints[i])
+        {
+            frame.mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
+            removed++;
+        }
+    }
+    return removed;
 }
 
 
@@ -540,7 +576,7 @@ void Tracking::StereoInitialization()
         for(int i=0; i<mCurrentFrame.N;i++)
         {
             float z = mCurrentFrame.mvDepth[i];
-            if(z>0)
+            if(z>0 && !mCurrentFrame.mvbDynamic[i])
             {
                 cv::Mat x3D = mCurrentFrame.UnprojectStereo(i);
                 MapPoint* pNewMP = new MapPoint(x3D,pKFini,mpMap);
@@ -789,6 +825,10 @@ bool Tracking::TrackReferenceKeyFrame()
     mCurrentFrame.mvpMapPoints = vpMapPointMatches;
     mCurrentFrame.SetPose(mLastFrame.mTcw);
 
+    nmatches -= RemoveDynamicAssociations(mCurrentFrame);
+    if(nmatches<15)
+        return false;
+
     Optimizer::PoseOptimization(&mCurrentFrame);
 
     // Discard outliers
@@ -833,7 +873,7 @@ void Tracking::UpdateLastFrame()
     for(int i=0; i<mLastFrame.N;i++)
     {
         float z = mLastFrame.mvDepth[i];
-        if(z>0)
+        if(z>0 && !mLastFrame.mvbDynamic[i])
         {
             vDepthIdx.push_back(make_pair(z,i));
         }
@@ -911,6 +951,10 @@ bool Tracking::TrackWithMotionModel()
     if(nmatches<20)
         return false;
 
+    nmatches -= RemoveDynamicAssociations(mCurrentFrame);
+    if(nmatches<20)
+        return false;
+
     // Optimize frame pose with all matches
     Optimizer::PoseOptimization(&mCurrentFrame);
 
@@ -952,6 +996,8 @@ bool Tracking::TrackLocalMap()
     UpdateLocalMap();
 
     SearchLocalPoints();
+
+    RemoveDynamicAssociations(mCurrentFrame);
 
     // Optimize Pose
     Optimizer::PoseOptimization(&mCurrentFrame);
@@ -1082,6 +1128,8 @@ void Tracking::CreateNewKeyFrame()
     if(!mpLocalMapper->SetNotStop(true))
         return;
 
+    RemoveDynamicAssociations(mCurrentFrame);
+
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpMap,mpKeyFrameDB);
 
     mpReferenceKF = pKF;
@@ -1099,7 +1147,7 @@ void Tracking::CreateNewKeyFrame()
         for(int i=0; i<mCurrentFrame.N; i++)
         {
             float z = mCurrentFrame.mvDepth[i];
-            if(z>0)
+            if(z>0 && !mCurrentFrame.mvbDynamic[i])
             {
                 vDepthIdx.push_back(make_pair(z,i));
             }
@@ -1448,11 +1496,15 @@ bool Tracking::Relocalization()
                     if(vbInliers[j])
                     {
                         mCurrentFrame.mvpMapPoints[j]=vvpMapPointMatches[i][j];
-                        sFound.insert(vvpMapPointMatches[i][j]);
                     }
                     else
                         mCurrentFrame.mvpMapPoints[j]=NULL;
                 }
+
+                RemoveDynamicAssociations(mCurrentFrame);
+                for(int j=0; j<mCurrentFrame.N; j++)
+                    if(mCurrentFrame.mvpMapPoints[j])
+                        sFound.insert(mCurrentFrame.mvpMapPoints[j]);
 
                 int nGood = Optimizer::PoseOptimization(&mCurrentFrame);
 
@@ -1470,6 +1522,7 @@ bool Tracking::Relocalization()
 
                     if(nadditional+nGood>=50)
                     {
+                        RemoveDynamicAssociations(mCurrentFrame);
                         nGood = Optimizer::PoseOptimization(&mCurrentFrame);
 
                         // If many inliers but still not enough, search by projection again in a narrower window
@@ -1485,6 +1538,7 @@ bool Tracking::Relocalization()
                             // Final optimization
                             if(nGood+nadditional>=50)
                             {
+                                RemoveDynamicAssociations(mCurrentFrame);
                                 nGood = Optimizer::PoseOptimization(&mCurrentFrame);
 
                                 for(int io =0; io<mCurrentFrame.N; io++)

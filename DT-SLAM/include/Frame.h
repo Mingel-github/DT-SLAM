@@ -22,6 +22,7 @@
 #define FRAME_H
 
 #include<vector>
+#include<cstdint>
 
 #include "MapPoint.h"
 #include "Thirdparty/DBoW2/DBoW2/BowVector.h"
@@ -154,6 +155,15 @@ public:
 
     // Flag to identify outlier associations.
     std::vector<bool> mvbOutlier;
+
+    // Semantic dynamic state is independent from geometric optimization outliers.
+    // Masks are aligned with mvKeys (the original RGB image coordinates).
+    cv::Mat mSemanticMask;
+    std::vector<std::uint8_t> mvbSemanticDynamic;
+
+    // Combined front-end dynamic state. In Phase 0 this is identical to
+    // mvbSemanticDynamic; geometry can be fused here later.
+    std::vector<std::uint8_t> mvbDynamic;
 
     // Keypoints are assigned to cells in a grid to reduce matching complexity when projecting MapPoints.
     static float mfGridElementWidthInv;
