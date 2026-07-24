@@ -11,6 +11,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <vector>
 #include <string>
@@ -25,6 +26,12 @@ struct Detection
     float confidence;
 };
 
+struct FrameSubmitTiming
+{
+    double mutexWaitMs;
+    double copyMs;
+};
+
 class YOLOSegment
 {
 public:
@@ -36,8 +43,10 @@ public:
     void Start();
     void Stop();
 
-    // Tracking线程调用：提交新帧（非阻塞深拷贝，带帧序号），取最新结果（异步一帧滞后）
-    void PushFrame(const cv::Mat &imRGB, int seq);
+    // Tracking线程调用：提交新帧（深拷贝，带帧序号）并读取最新结果。
+    // 同步或异步策略由上层调用者决定。
+    FrameSubmitTiming PushFrame(const cv::Mat &imRGB, int seq);
+    bool WaitForMask(int seq, cv::Mat &mask, int timeoutMs = 30000);
     cv::Mat GetLatestMask();
     int GetMaskSeq();              // 返回mask对应帧序号（-1=暂无）
     std::vector<Detection> GetDetections();
@@ -74,15 +83,20 @@ private:
 
     // 线程安全buffer
     std::mutex mMutexFrame;
+    std::condition_variable mConditionFrame;
     cv::Mat mPendingFrame;
     int mPendingSeq;
     bool mNewFrame;
 
     std::mutex mMutexResult;
+    std::condition_variable mConditionResult;
     cv::Mat mLatestMask;
     int mLatestMaskSeq;
     std::vector<Detection> mLatestDetections;
-    std::vector<float> mInferenceTimes;  // 每帧推理耗时(ms)
+    std::vector<float> mPreprocessTimes; // 每帧预处理耗时(ms)
+    std::vector<float> mExecutionTimes;  // 每帧ONNX执行耗时(ms)
+    std::vector<float> mPostprocessTimes;// 每帧后处理耗时(ms)
+    std::vector<float> mInferenceTimes;  // 每帧端到端语义耗时(ms)
     std::atomic<int> mProcessedFrames;  // 实际完成的推理帧数（原子，无data race）
 
     std::thread mThread;

@@ -561,7 +561,14 @@ void Tracking::Track()
 
 void Tracking::StereoInitialization()
 {
-    if(mCurrentFrame.N>500)
+    int nStaticFeatures = 0;
+    for(int i=0; i<mCurrentFrame.N; i++)
+    {
+        if(!mCurrentFrame.mvbDynamic[i])
+            nStaticFeatures++;
+    }
+
+    if(nStaticFeatures>500)
     {
         // Set Frame pose to the origin
         mCurrentFrame.SetPose(cv::Mat::eye(4,4,CV_32F));
@@ -1068,7 +1075,8 @@ bool Tracking::NeedNewKeyFrame()
     {
         for(int i =0; i<mCurrentFrame.N; i++)
         {
-            if(mCurrentFrame.mvDepth[i]>0 && mCurrentFrame.mvDepth[i]<mThDepth)
+            if(mCurrentFrame.mvDepth[i]>0 && mCurrentFrame.mvDepth[i]<mThDepth &&
+               !mCurrentFrame.mvbDynamic[i])
             {
                 if(mCurrentFrame.mvpMapPoints[i] && !mCurrentFrame.mvbOutlier[i])
                     nTrackedClose++;

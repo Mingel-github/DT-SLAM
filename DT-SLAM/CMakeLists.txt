@@ -33,6 +33,11 @@ if(NOT OpenCV_FOUND)
 endif()
 
 find_package(Eigen3 3.1.0 REQUIRED)
+# The bundled FindEigen3.cmake only exposes EIGEN3_FOUND. Pangolin's package
+# config uses the canonical Eigen3_FOUND spelling when resolving dependencies.
+if(EIGEN3_FOUND AND NOT Eigen3_FOUND)
+    set(Eigen3_FOUND TRUE)
+endif()
 # Fix: newer cmake may not create Eigen3::Eigen target from find_package
 if(NOT TARGET Eigen3::Eigen)
     add_library(Eigen3::Eigen INTERFACE IMPORTED)
@@ -41,10 +46,20 @@ if(NOT TARGET Eigen3::Eigen)
 endif()
 find_package(Pangolin REQUIRED)
 
+set(ONNXRUNTIME_ROOT
+    "${PROJECT_SOURCE_DIR}/thirdparty/onnxruntime"
+    CACHE PATH "ONNX Runtime C/C++ package root")
+if(NOT EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h" OR
+   NOT EXISTS "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.so")
+    message(FATAL_ERROR
+        "Invalid ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}: expected include/ and lib/libonnxruntime.so")
+endif()
+message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
+
 include_directories(
 ${PROJECT_SOURCE_DIR}
 ${PROJECT_SOURCE_DIR}/include
-${PROJECT_SOURCE_DIR}/thirdparty/onnxruntime/include
+${ONNXRUNTIME_ROOT}/include
 ${EIGEN3_INCLUDE_DIR}
 ${Pangolin_INCLUDE_DIRS}
 )
@@ -82,7 +97,7 @@ ${Pangolin_LIBRARIES}
 ${PROJECT_SOURCE_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
 ${PROJECT_SOURCE_DIR}/Thirdparty/g2o/lib/libg2o.so
 ${CMAKE_THREAD_LIBS_INIT}
-${PROJECT_SOURCE_DIR}/thirdparty/onnxruntime/lib/libonnxruntime.so
+${ONNXRUNTIME_ROOT}/lib/libonnxruntime.so
 )
 
 # Build examples
@@ -117,4 +132,3 @@ target_link_libraries(mono_kitti ${PROJECT_NAME})
 add_executable(mono_euroc
 Examples/Monocular/mono_euroc.cc)
 target_link_libraries(mono_euroc ${PROJECT_NAME})
-

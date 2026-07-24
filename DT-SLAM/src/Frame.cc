@@ -404,6 +404,8 @@ void Frame::ComputeBoW()
 {
     if(mBowVec.empty())
     {
+        // Phase 0 keeps all descriptors for place-candidate retrieval. Dynamic
+        // observations are excluded later from matching, optimization and map admission.
         vector<cv::Mat> vCurrentDesc = Converter::toDescriptorVector(mDescriptors);
         mpORBvocabulary->transform(vCurrentDesc,mBowVec,mFeatVec,4);
     }

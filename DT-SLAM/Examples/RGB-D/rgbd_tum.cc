@@ -21,6 +21,8 @@
 
 #include<iostream>
 #include<algorithm>
+#include<cmath>
+#include<cstdlib>
 #include<fstream>
 #include<chrono>
 #include<unistd.h>
@@ -35,23 +37,27 @@ using namespace std;
 void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageFilenamesRGB,
                 vector<string> &vstrImageFilenamesD, vector<double> &vTimestamps);
 
-bool WaitForMask(ORB_SLAM2::YOLOSegment* pYOLO, const int seq, cv::Mat &mask,
-                 const int timeoutMs = 30000)
+void PrintTimingSummary(const string &name, const vector<double> &samples)
 {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-    while(std::chrono::steady_clock::now()<deadline)
-    {
-        const int maskSeq = pYOLO->GetMaskSeq();
-        if(maskSeq==seq)
-        {
-            mask = pYOLO->GetLatestMask();
-            return !mask.empty();
-        }
-        if(maskSeq>seq)
-            return false;
-        usleep(2000);
-    }
-    return false;
+    if(samples.empty())
+        return;
+
+    vector<double> sorted = samples;
+    sort(sorted.begin(),sorted.end());
+
+    double sum = 0.0;
+    for(double value : samples)
+        sum += value;
+
+    const size_t p95Index = static_cast<size_t>(
+        ceil(0.95*static_cast<double>(sorted.size()))) - 1;
+
+    cout << "[RGBD Timing] " << name << "(ms): mean=" << sum/samples.size()
+         << " median=" << sorted[sorted.size()/2]
+         << " p95=" << sorted[p95Index]
+         << " min=" << sorted.front()
+         << " max=" << sorted.back()
+         << " n=" << sorted.size() << endl;
 }
 
 int main(int argc, char **argv)
@@ -90,7 +96,16 @@ int main(int argc, char **argv)
     vector<int> vMaskAges; // mask年龄统计（帧延时）
     if(argc == 6 && string(argv[5]).find(".onnx") != string::npos)
     {
-        pYOLO = new ORB_SLAM2::YOLOSegment(argv[5], 0.5f, 0.45f);
+        try
+        {
+            pYOLO = new ORB_SLAM2::YOLOSegment(argv[5], 0.5f, 0.45f);
+        }
+        catch(const std::exception& e)
+        {
+            cerr << "[DT-SLAM] Failed to initialize semantic inference: "
+                 << e.what() << endl;
+            return 1;
+        }
         pYOLO->Start();
         cout << "[DT-SLAM] 语义线程已启动，模型: " << argv[5] << endl;
 
@@ -101,7 +116,7 @@ int main(int argc, char **argv)
         {
             pYOLO->PushFrame(imFirst, 0);
             cv::Mat firstMask;
-            if(!WaitForMask(pYOLO,0,firstMask))
+            if(!pYOLO->WaitForMask(0,firstMask))
             {
                 cerr << "[DT-SLAM] Failed to obtain the semantic mask for frame 0" << endl;
                 pYOLO->Stop();
@@ -112,12 +127,36 @@ int main(int argc, char **argv)
         }
     }
 
-    // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::RGBD,true); // 开启可视化
+    // Create SLAM system. Headless runs can disable Pangolin without changing
+    // the tracking pipeline; the viewer remains enabled by default.
+    const char* disableViewer = std::getenv("DT_SLAM_DISABLE_VIEWER");
+    const bool useViewer = !(disableViewer && string(disableViewer)=="1");
+    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::RGBD,useViewer);
 
     // Vector for tracking time statistics
     vector<float> vTimesTrack;
     vTimesTrack.resize(nImages);
+    vector<double> vTrackingTimesMs;
+
+    // End-to-end timing is intentionally collected without changing the
+    // existing processing order or dataset pacing policy.
+    vector<double> vImageIOTimes;
+    vector<double> vGetMaskSeqTimes;
+    vector<double> vFrameMutexWaitTimes;
+    vector<double> vFrameCopyTimes;
+    vector<double> vPushCopyTimes;
+    vector<double> vMaskWaitTimes;
+    vector<double> vSemanticBlockTimes;
+    vector<double> vActiveTotalTimes;
+    vector<double> vSleepTimes;
+    vector<double> vFrameWallTimes;
+    vector<double> vPacingErrorTimes;
+    vector<double> vDeadlineOverruns;
+    int nDeadlineMisses = 0;
+
+    std::chrono::steady_clock::time_point firstLoopStart;
+    std::chrono::steady_clock::time_point previousLoopStart;
+    std::chrono::steady_clock::time_point lastLoopStart;
 
     cout << endl << "-------" << endl;
     cout << "Start processing sequence ..." << endl;
@@ -127,9 +166,30 @@ int main(int argc, char **argv)
     cv::Mat imRGB, imD;
     for(int ni=0; ni<nImages; ni++)
     {
+        const std::chrono::steady_clock::time_point tLoopStart =
+            std::chrono::steady_clock::now();
+        if(ni==0)
+        {
+            firstLoopStart = tLoopStart;
+        }
+        else
+        {
+            const double frameWallMs =
+                std::chrono::duration<double,std::milli>(
+                    tLoopStart-previousLoopStart).count();
+            const double targetIntervalMs =
+                (vTimestamps[ni]-vTimestamps[ni-1])*1000.0;
+            vFrameWallTimes.push_back(frameWallMs);
+            vPacingErrorTimes.push_back(frameWallMs-targetIntervalMs);
+        }
+        previousLoopStart = tLoopStart;
+        lastLoopStart = tLoopStart;
+
         // Read image and depthmap from file
         imRGB = cv::imread(string(argv[3])+"/"+vstrImageFilenamesRGB[ni], cv::IMREAD_UNCHANGED);
         imD = cv::imread(string(argv[3])+"/"+vstrImageFilenamesD[ni], cv::IMREAD_UNCHANGED);
+        const std::chrono::steady_clock::time_point tImagesReady =
+            std::chrono::steady_clock::now();
         double tframe = vTimestamps[ni];
 
         if(imRGB.empty())
@@ -139,16 +199,37 @@ int main(int argc, char **argv)
             return 1;
         }
 
+        vImageIOTimes.push_back(
+            std::chrono::duration<double,std::milli>(
+                tImagesReady-tLoopStart).count());
+
         // Phase 0 semantic baseline: every RGB frame is paired with the mask
         // carrying the same sequence number. The worker remains separate, but
         // tracking never consumes a stale mask.
         cv::Mat mask;
         if(pYOLO)
         {
-            if(pYOLO->GetMaskSeq()!=ni)
-                pYOLO->PushFrame(imRGB, ni);
+            const std::chrono::steady_clock::time_point tSemanticStart =
+                std::chrono::steady_clock::now();
+            bool pushedFrame = false;
+            const int currentMaskSeq = pYOLO->GetMaskSeq();
+            const std::chrono::steady_clock::time_point tGetMaskSeqDone =
+                std::chrono::steady_clock::now();
+            vGetMaskSeqTimes.push_back(
+                std::chrono::duration<double,std::milli>(
+                    tGetMaskSeqDone-tSemanticStart).count());
+            if(currentMaskSeq!=ni)
+            {
+                const ORB_SLAM2::FrameSubmitTiming submitTiming =
+                    pYOLO->PushFrame(imRGB, ni);
+                vFrameMutexWaitTimes.push_back(submitTiming.mutexWaitMs);
+                vFrameCopyTimes.push_back(submitTiming.copyMs);
+                pushedFrame = true;
+            }
+            const std::chrono::steady_clock::time_point tPushDone =
+                std::chrono::steady_clock::now();
 
-            if(!WaitForMask(pYOLO,ni,mask))
+            if(!pYOLO->WaitForMask(ni,mask))
             {
                 cerr << "[DT-SLAM] Failed to obtain the semantic mask for frame " << ni << endl;
                 pYOLO->Stop();
@@ -156,6 +237,21 @@ int main(int argc, char **argv)
                 SLAM.Shutdown();
                 return 1;
             }
+
+            const std::chrono::steady_clock::time_point tMaskReady =
+                std::chrono::steady_clock::now();
+            if(pushedFrame)
+            {
+                vPushCopyTimes.push_back(
+                    std::chrono::duration<double,std::milli>(
+                        tPushDone-tSemanticStart).count());
+            }
+            vMaskWaitTimes.push_back(
+                std::chrono::duration<double,std::milli>(
+                    tMaskReady-tPushDone).count());
+            vSemanticBlockTimes.push_back(
+                std::chrono::duration<double,std::milli>(
+                    tMaskReady-tSemanticStart).count());
 
             SLAM.UpdateDetections(pYOLO->GetDetections());
             nMaskReady++;
@@ -180,6 +276,11 @@ int main(int argc, char **argv)
         double ttrack= std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count();
 
         vTimesTrack[ni]=ttrack;
+        vTrackingTimesMs.push_back(ttrack*1000.0);
+        const double activeTotalMs =
+            std::chrono::duration<double,std::milli>(
+                t2-tLoopStart).count();
+        vActiveTotalTimes.push_back(activeTotalMs);
 
         // Wait to load the next frame
         double T=0;
@@ -188,9 +289,29 @@ int main(int argc, char **argv)
         else if(ni>0)
             T = tframe-vTimestamps[ni-1];
 
-        if(ttrack<T)
-            usleep((T-ttrack)*1e6);
+        // Pace the dataset using the complete active frame time, including
+        // image I/O, exact-frame semantic inference and SLAM tracking.
+        // vTimesTrack intentionally remains the SLAM-only statistic.
+        const std::chrono::steady_clock::time_point tSleepStart =
+            std::chrono::steady_clock::now();
+        const double activeTotalSeconds = activeTotalMs/1000.0;
+        if(activeTotalSeconds<T)
+            usleep((T-activeTotalSeconds)*1e6);
+        const std::chrono::steady_clock::time_point tSleepEnd =
+            std::chrono::steady_clock::now();
+        vSleepTimes.push_back(
+            std::chrono::duration<double,std::milli>(
+                tSleepEnd-tSleepStart).count());
+
+        const double targetIntervalMs = T*1000.0;
+        const double deadlineOverrunMs =
+            std::max(0.0,activeTotalMs-targetIntervalMs);
+        vDeadlineOverruns.push_back(deadlineOverrunMs);
+        if(deadlineOverrunMs>0.0)
+            nDeadlineMisses++;
     }
+    const std::chrono::steady_clock::time_point sequenceEnd =
+        std::chrono::steady_clock::now();
 
     // DT-SLAM: 停止语义线程 + 输出性能统计
     if(pYOLO)
@@ -206,6 +327,42 @@ int main(int argc, char **argv)
                       << " max=" << aMax << " n=" << vMaskAges.size() << endl;
         }
         delete pYOLO;
+    }
+
+    cout << "[RGBD Timing] End-to-end frame timing (measurement only)" << endl;
+    PrintTimingSummary("image_io",vImageIOTimes);
+    PrintTimingSummary("get_mask_seq",vGetMaskSeqTimes);
+    PrintTimingSummary("frame_mutex_wait",vFrameMutexWaitTimes);
+    PrintTimingSummary("frame_copy",vFrameCopyTimes);
+    PrintTimingSummary("push_copy",vPushCopyTimes);
+    PrintTimingSummary("mask_wait",vMaskWaitTimes);
+    PrintTimingSummary("semantic_block_all",vSemanticBlockTimes);
+    if(vSemanticBlockTimes.size()>1)
+    {
+        const vector<double> steadySemanticBlock(
+            vSemanticBlockTimes.begin()+1,vSemanticBlockTimes.end());
+        PrintTimingSummary("semantic_block_steady",steadySemanticBlock);
+    }
+    PrintTimingSummary("tracking",vTrackingTimesMs);
+    PrintTimingSummary("active_total",vActiveTotalTimes);
+    PrintTimingSummary("sleep_actual",vSleepTimes);
+    PrintTimingSummary("frame_wall",vFrameWallTimes);
+    PrintTimingSummary("pacing_error",vPacingErrorTimes);
+    PrintTimingSummary("deadline_overrun",vDeadlineOverruns);
+
+    const double sequenceWallSeconds =
+        std::chrono::duration<double>(sequenceEnd-firstLoopStart).count();
+    cout << "[RGBD Timing] deadline_missed=" << nDeadlineMisses
+         << "/" << nImages << endl;
+    cout << "[RGBD Timing] sequence_wall(s)=" << sequenceWallSeconds << endl;
+    if(nImages>1)
+    {
+        const double loopStartSpanSeconds =
+            std::chrono::duration<double>(lastLoopStart-firstLoopStart).count();
+        const double datasetSpanSeconds =
+            vTimestamps.back()-vTimestamps.front();
+        cout << "[RGBD Timing] actual_fps=" << (nImages-1)/loopStartSpanSeconds
+             << " dataset_fps=" << (nImages-1)/datasetSpanSeconds << endl;
     }
 
     // Stop all threads

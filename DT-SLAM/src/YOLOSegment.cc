@@ -5,11 +5,41 @@
 #include "YOLOSegment.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/dnn.hpp>
+#include <algorithm>
 #include <iostream>
 #include <cmath>
+#include <stdexcept>
 
 namespace ORB_SLAM2
 {
+
+namespace
+{
+
+void PrintTimingSummary(const char* stage, const std::vector<float>& samples)
+{
+    if (samples.empty())
+        return;
+
+    std::vector<float> sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+
+    float sum = 0.0f;
+    for (float value : samples)
+        sum += value;
+
+    const size_t p95Index = static_cast<size_t>(
+        std::ceil(0.95 * static_cast<double>(sorted.size()))) - 1;
+
+    std::cout << "[YOLO] " << stage << "(ms): mean=" << sum / samples.size()
+              << " median=" << sorted[sorted.size()/2]
+              << " p95=" << sorted[p95Index]
+              << " min=" << sorted.front()
+              << " max=" << sorted.back()
+              << " n=" << sorted.size() << std::endl;
+}
+
+} // namespace
 
 YOLOSegment::YOLOSegment(const std::string &modelPath,
                          float confThreshold, float nmsThreshold)
@@ -24,6 +54,24 @@ YOLOSegment::YOLOSegment(const std::string &modelPath,
 {
     mSessionOpts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     mSessionOpts.SetIntraOpNumThreads(2);
+
+    const std::vector<std::string> providers = Ort::GetAvailableProviders();
+    std::cout << "[YOLO] ONNX Runtime providers:";
+    for (const std::string& provider : providers)
+        std::cout << " " << provider;
+    std::cout << std::endl;
+
+    if (std::find(providers.begin(), providers.end(), "CUDAExecutionProvider") == providers.end())
+    {
+        throw std::runtime_error(
+            "CUDAExecutionProvider is unavailable. Install the ONNX Runtime GPU "
+            "package and CUDA/cuDNN runtime libraries; CPU fallback is disabled.");
+    }
+
+    OrtCUDAProviderOptions cudaOptions;
+    cudaOptions.device_id = 0;
+    mSessionOpts.AppendExecutionProvider_CUDA(cudaOptions);
+    std::cout << "[YOLO] Semantic provider: CUDAExecutionProvider (device 0)" << std::endl;
 
     mSession.reset(new Ort::Session(mEnv, modelPath.c_str(), mSessionOpts));
 
@@ -61,31 +109,60 @@ void YOLOSegment::Start()
 
 void YOLOSegment::Stop()
 {
-    mRunning = false;
+    const bool wasRunning = mRunning.exchange(false);
+    mConditionFrame.notify_all();
+    mConditionResult.notify_all();
     if (mThread.joinable())
         mThread.join();
 
+    if (!wasRunning)
+        return;
+
+    PrintTimingSummary("preprocess", mPreprocessTimes);
+    PrintTimingSummary("onnx_execution", mExecutionTimes);
+    PrintTimingSummary("postprocess", mPostprocessTimes);
+    PrintTimingSummary("semantic_total", mInferenceTimes);
     if (!mInferenceTimes.empty())
-    {
-        std::sort(mInferenceTimes.begin(), mInferenceTimes.end());
-        float sum = 0;
-        for (float t : mInferenceTimes) sum += t;
-        int n = (int)mInferenceTimes.size();
-        std::cout << "[YOLO] 推理耗时(ms): mean=" << sum/n
-                  << " median=" << mInferenceTimes[n/2]
-                  << " min=" << mInferenceTimes[0]
-                  << " max=" << mInferenceTimes[n-1]
-                  << " n=" << n
-                  << " | 总计处理" << mProcessedFrames.load() << "帧" << std::endl;
-    }
+        std::cout << "[YOLO] 总计处理" << mProcessedFrames.load() << "帧" << std::endl;
 }
 
-void YOLOSegment::PushFrame(const cv::Mat &imRGB, int seq)
+FrameSubmitTiming YOLOSegment::PushFrame(const cv::Mat &imRGB, int seq)
 {
-    std::lock_guard<std::mutex> lock(mMutexFrame);
+    const auto tBeforeLock = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> lock(mMutexFrame);
+    const auto tLockAcquired = std::chrono::steady_clock::now();
     imRGB.copyTo(mPendingFrame);
     mPendingSeq = seq;
     mNewFrame = true;
+    const auto tCopyDone = std::chrono::steady_clock::now();
+
+    FrameSubmitTiming timing;
+    timing.mutexWaitMs =
+        std::chrono::duration<double,std::milli>(
+            tLockAcquired-tBeforeLock).count();
+    timing.copyMs =
+        std::chrono::duration<double,std::milli>(
+            tCopyDone-tLockAcquired).count();
+    lock.unlock();
+    mConditionFrame.notify_one();
+    return timing;
+}
+
+bool YOLOSegment::WaitForMask(int seq, cv::Mat &mask, int timeoutMs)
+{
+    std::unique_lock<std::mutex> lock(mMutexResult);
+    const bool ready = mConditionResult.wait_for(
+        lock, std::chrono::milliseconds(timeoutMs),
+        [this,seq]
+        {
+            return !mRunning || mLatestMaskSeq>=seq;
+        });
+
+    if(!ready || mLatestMaskSeq!=seq || mLatestMask.empty())
+        return false;
+
+    mask = mLatestMask.clone();
+    return true;
 }
 
 cv::Mat YOLOSegment::GetLatestMask()
@@ -110,17 +187,23 @@ std::vector<Detection> YOLOSegment::GetDetections()
 
 void YOLOSegment::Run()
 {
-    while (mRunning)
+    while (true)
     {
         cv::Mat frame;
         int seq;
         {
-            std::lock_guard<std::mutex> lock(mMutexFrame);
-            if (!mNewFrame || mPendingFrame.empty())
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                continue;
-            }
+            std::unique_lock<std::mutex> lock(mMutexFrame);
+            mConditionFrame.wait(
+                lock,
+                [this]
+                {
+                    return !mRunning ||
+                           (mNewFrame && !mPendingFrame.empty());
+                });
+
+            if(!mRunning)
+                break;
+
             mNewFrame = false;
             frame = mPendingFrame.clone();
             seq = mPendingSeq;
@@ -128,10 +211,11 @@ void YOLOSegment::Run()
 
         try
         {
-            auto t1 = std::chrono::steady_clock::now();
+            auto t0 = std::chrono::steady_clock::now();
 
             float scale; int padX, padY;
             cv::Mat blob = Preprocess(frame, scale, padX, padY);
+            auto t1 = std::chrono::steady_clock::now();
 
             Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
             Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
@@ -145,19 +229,33 @@ void YOLOSegment::Run()
             auto outputs = mSession->Run(Ort::RunOptions{nullptr},
                                           inNames.data(), &inputTensor, 1,
                                           outNames.data(), outNames.size());
+            auto t2 = std::chrono::steady_clock::now();
 
             std::vector<Detection> detections;
             cv::Mat mask = Postprocess(frame, outputs, scale, padX, padY, detections);
+            auto t3 = std::chrono::steady_clock::now();
 
-            auto t2 = std::chrono::steady_clock::now();
-            float ms = std::chrono::duration<float, std::milli>(t2 - t1).count();
+            const float preprocessMs =
+                std::chrono::duration<float, std::milli>(t1-t0).count();
+            const float executionMs =
+                std::chrono::duration<float, std::milli>(t2-t1).count();
+            const float postprocessMs =
+                std::chrono::duration<float, std::milli>(t3-t2).count();
+            const float totalMs =
+                std::chrono::duration<float, std::milli>(t3-t0).count();
 
-            std::lock_guard<std::mutex> lock(mMutexResult);
-            mask.copyTo(mLatestMask);
-            mLatestMaskSeq = seq;
-            mLatestDetections = detections;
-            mInferenceTimes.push_back(ms);
-            mProcessedFrames.fetch_add(1);
+            {
+                std::lock_guard<std::mutex> lock(mMutexResult);
+                mask.copyTo(mLatestMask);
+                mLatestMaskSeq = seq;
+                mLatestDetections = detections;
+                mPreprocessTimes.push_back(preprocessMs);
+                mExecutionTimes.push_back(executionMs);
+                mPostprocessTimes.push_back(postprocessMs);
+                mInferenceTimes.push_back(totalMs);
+                mProcessedFrames.fetch_add(1);
+            }
+            mConditionResult.notify_all();
         }
         catch (const std::exception& e)
         {
