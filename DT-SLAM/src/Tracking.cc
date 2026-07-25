@@ -50,7 +50,9 @@ namespace ORB_SLAM2
 Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Map *pMap, KeyFrameDatabase* pKFDB, const string &strSettingPath, const int sensor):
     mState(NO_IMAGES_YET), mSensor(sensor), mbOnlyTracking(false), mbVO(false), mpORBVocabulary(pVoc),
     mpKeyFrameDB(pKFDB), mpInitializer(static_cast<Initializer*>(NULL)), mpSystem(pSys), mpViewer(NULL),
-    mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpMap(pMap), mnLastRelocFrameId(0)
+    mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpMap(pMap),
+    mbGeometryShadowEnabled(false), mnGeometryLogEveryN(30),
+    mnGeometryComputedFrames(0), mnLastRelocFrameId(0)
 {
     // Load camera parameters from settings file
 
@@ -150,6 +152,20 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mDepthMapFactor = 1.0f/mDepthMapFactor;
     }
 
+    mGeometricDetector.SetCameraMatrix(mK);
+    const cv::FileNode geometryEnableNode = fSettings["Geometry.Enable"];
+    if(!geometryEnableNode.empty())
+        mbGeometryShadowEnabled = static_cast<int>(geometryEnableNode)!=0;
+
+    const cv::FileNode geometryLogEveryNode = fSettings["Geometry.LogEveryN"];
+    if(!geometryLogEveryNode.empty())
+        mnGeometryLogEveryN = std::max(1,static_cast<int>(geometryLogEveryNode));
+
+    cout << endl << "Geometry G0-1 Shadow: "
+         << (mbGeometryShadowEnabled ? "enabled" : "disabled") << endl;
+    if(mbGeometryShadowEnabled)
+        cout << "- log every: " << mnGeometryLogEveryN << " computed frames" << endl;
+
 }
 
 void Tracking::SetLocalMapper(LocalMapping *pLocalMapper)
@@ -231,6 +247,9 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
     if((fabs(mDepthMapFactor-1.0f)>1e-5) || imDepth.type()!=CV_32F)
         imDepth.convertTo(imDepth,CV_32F,mDepthMapFactor);
 
+    if(mbGeometryShadowEnabled)
+        mCurrentDepthMeters = imDepth;
+
     mCurrentFrame = Frame(mImGray,imDepth,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
 
     cv::Mat semanticMask;
@@ -247,6 +266,22 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
     mpFrameDrawer->UpdateMask(mCurrentFrame.mSemanticMask);
 
     Track();
+
+    if(mbGeometryShadowEnabled)
+    {
+        if(mState==OK && !mCurrentFrame.mTcw.empty())
+        {
+            cv::Mat referenceDepth = imDepth.clone();
+            if(!semanticMask.empty())
+                referenceDepth.setTo(0.0f,semanticMask);
+            mGeometricDetector.UpdateReference(
+                referenceDepth,mCurrentFrame.mTcw,mCurrentFrame.mnId);
+        }
+        else
+        {
+            mGeometricDetector.ResetReference();
+        }
+    }
 
     return mCurrentFrame.mTcw.clone();
 }
@@ -285,6 +320,45 @@ int Tracking::RemoveDynamicAssociations(Frame &frame)
         }
     }
     return removed;
+}
+
+void Tracking::RunGeometryShadow()
+{
+    if(!mbGeometryShadowEnabled || mSensor!=System::RGBD ||
+       mCurrentDepthMeters.empty() || mCurrentFrame.mTcw.empty() ||
+       !mGeometricDetector.HasReference())
+    {
+        return;
+    }
+
+    GeometricWarpResult result;
+    if(!mGeometricDetector.Compute(
+           mCurrentDepthMeters,mCurrentFrame.mTcw,result))
+    {
+        return;
+    }
+
+    ++mnGeometryComputedFrames;
+    if(mnGeometryComputedFrames==1 ||
+       mnGeometryComputedFrames%static_cast<long unsigned int>(mnGeometryLogEveryN)==0)
+    {
+        cout << "[Geometry G0-1] frame=" << mCurrentFrame.mnId
+             << " ref=" << mGeometricDetector.ReferenceFrameId()
+             << " ref_valid=" << result.stats.referenceValidPixels
+             << " projected=" << result.stats.projectedSamples
+             << " zbuffer=" << result.stats.zbufferValidPixels
+             << " current_valid=" << result.stats.currentValidPixels
+             << " comparisons=" << result.stats.validComparisons
+             << " pred_coverage=" << result.stats.predictionCoverageRatio
+             << " compare_coverage=" << result.stats.comparisonCoverageRatio
+             << " residual_mean_m=" << result.stats.residualMean
+             << " residual_mean_abs_m=" << result.stats.residualMeanAbs
+             << " residual_max_abs_m=" << result.stats.residualMaxAbs
+             << " warp_ms=" << result.stats.warpMs
+             << " residual_ms=" << result.stats.residualMs
+             << " total_ms=" << result.stats.totalMs
+             << endl;
+    }
 }
 
 
@@ -448,6 +522,9 @@ void Tracking::Track()
         mCurrentFrame.mpReferenceKF = mpReferenceKF;
 
         // If we have an initial estimation of the camera pose and matching. Track the local map.
+        if(bOK)
+            RunGeometryShadow();
+
         if(!mbOnlyTracking)
         {
             if(bOK)
@@ -1612,6 +1689,9 @@ void Tracking::Reset()
     KeyFrame::nNextId = 0;
     Frame::nNextId = 0;
     mState = NO_IMAGES_YET;
+    mGeometricDetector.ResetReference();
+    mCurrentDepthMeters.release();
+    mnGeometryComputedFrames = 0;
 
     if(mpInitializer)
     {
@@ -1642,6 +1722,7 @@ void Tracking::ChangeCalibration(const string &strSettingPath)
     K.at<float>(0,2) = cx;
     K.at<float>(1,2) = cy;
     K.copyTo(mK);
+    mGeometricDetector.SetCameraMatrix(mK);
 
     cv::Mat DistCoef(4,1,CV_32F);
     DistCoef.at<float>(0) = fSettings["Camera.k1"];

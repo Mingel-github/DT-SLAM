@@ -54,6 +54,16 @@ ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 
 #--------------------------------------------------------------------------------------------
+# G0-1 Geometry Shadow Parameters
+#--------------------------------------------------------------------------------------------
+
+# 0 keeps the frozen semantic/baseline tracking path unchanged.
+Geometry.Enable: 0
+
+# Print the first result and then every N computed frames.
+Geometry.LogEveryN: 30
+
+#--------------------------------------------------------------------------------------------
 # Viewer Parameters
 #--------------------------------------------------------------------------------------------
 Viewer.KeyFrameSize: 0.05
@@ -66,4 +76,3 @@ Viewer.ViewpointX: 0
 Viewer.ViewpointY: -0.7
 Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500
-

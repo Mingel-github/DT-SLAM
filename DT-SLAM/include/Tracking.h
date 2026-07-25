@@ -37,6 +37,7 @@
 #include "Initializer.h"
 #include "MapDrawer.h"
 #include "System.h"
+#include "GeometricDynamicDetector.h"
 
 #include <mutex>
 
@@ -144,6 +145,7 @@ protected:
     // Semantic dynamic observations are kept separate from optimizer outliers.
     void UpdateDynamicFeaturesFromMask(Frame &frame, const cv::Mat &mask);
     int RemoveDynamicAssociations(Frame &frame);
+    void RunGeometryShadow();
 
     bool NeedNewKeyFrame();
     void CreateNewKeyFrame();
@@ -201,6 +203,13 @@ protected:
 
     // For RGB-D inputs only. For some datasets (e.g. TUM) the depthmap values are scaled.
     float mDepthMapFactor;
+
+    // G0-1 geometry shadow state. It is read-only with respect to SLAM.
+    cv::Mat mCurrentDepthMeters;
+    GeometricDynamicDetector mGeometricDetector;
+    bool mbGeometryShadowEnabled;
+    int mnGeometryLogEveryN;
+    long unsigned int mnGeometryComputedFrames;
 
     //Current matches in frame
     int mnMatchesInliers;
