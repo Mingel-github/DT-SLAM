@@ -1,0 +1,113 @@
+
+ORB-SLAM2 Copyright (C) 2014-2016 Raul Mur-Artal, University of Zaragoza.
+This program comes with ABSOLUTELY NO WARRANTY;
+This is free software, and you are welcome to redistribute it
+under certain conditions. See LICENSE.txt.
+
+Input sensor was set to: RGB-D
+
+Loading ORB Vocabulary. This could take a while...
+Vocabulary loaded!
+
+
+Camera Parameters: 
+- fx: 535.4
+- fy: 539.2
+- cx: 320.1
+- cy: 247.6
+- k1: 0
+- k2: 0
+- p1: 0
+- p2: 0
+- fps: 30
+- color order: RGB (ignored if grayscale)
+
+ORB Extractor Parameters: 
+- Number of Features: 1000
+- Scale Levels: 8
+- Scale Factor: 1.2
+- Initial Fast Threshold: 20
+- Minimum Fast Threshold: 7
+
+Depth Threshold (Close/Far Points): 2.98842
+
+Geometry G0-1 Shadow: enabled
+- log every: 1 computed frames
+
+-------
+Start processing sequence ...
+Images in the sequence: 50
+
+New map created with 732 points
+[Geometry G0-1] frame=1 ref=0 ref_valid=216875 projected=216875 zbuffer=216276 current_valid=216875 comparisons=213452 pred_coverage=0.704023 compare_coverage=0.694831 residual_mean_m=-0.00776892 residual_mean_abs_m=0.0239234 residual_max_abs_m=7.67954 warp_ms=2.00363 residual_ms=0.935217 total_ms=3.27318
+[Geometry G0-1] frame=2 ref=1 ref_valid=216875 projected=216875 zbuffer=216018 current_valid=216875 comparisons=213967 pred_coverage=0.703184 compare_coverage=0.696507 residual_mean_m=0.000254775 residual_mean_abs_m=0.0166536 residual_max_abs_m=7.68423 warp_ms=2.01441 residual_ms=0.938598 total_ms=3.0095
+[Geometry G0-1] frame=3 ref=2 ref_valid=216875 projected=216875 zbuffer=216032 current_valid=216303 comparisons=208048 pred_coverage=0.703229 compare_coverage=0.67724 residual_mean_m=0.00553708 residual_mean_abs_m=0.0589206 residual_max_abs_m=7.69898 warp_ms=2.01598 residual_ms=0.690217 total_ms=2.77289
+[Geometry G0-1] frame=4 ref=3 ref_valid=216303 projected=216303 zbuffer=215400 current_valid=215617 comparisons=208276 pred_coverage=0.701172 compare_coverage=0.677982 residual_mean_m=0.0100023 residual_mean_abs_m=0.0509185 residual_max_abs_m=6.21205 warp_ms=2.00439 residual_ms=0.686498 total_ms=2.74329
+[Geometry G0-1] frame=5 ref=4 ref_valid=215617 projected=215617 zbuffer=215221 current_valid=214567 comparisons=208801 pred_coverage=0.700589 compare_coverage=0.679691 residual_mean_m=-0.00564718 residual_mean_abs_m=0.0369978 residual_max_abs_m=6.74304 warp_ms=1.91884 residual_ms=0.887506 total_ms=3.04904
+[Geometry G0-1] frame=6 ref=5 ref_valid=214567 projected=214567 zbuffer=213955 current_valid=214907 comparisons=208585 pred_coverage=0.696468 compare_coverage=0.678988 residual_mean_m=-0.0117306 residual_mean_abs_m=0.0391067 residual_max_abs_m=6.59558 warp_ms=1.90282 residual_ms=0.659639 total_ms=2.607
+[Geometry G0-1] frame=7 ref=6 ref_valid=214907 projected=214907 zbuffer=214365 current_valid=213354 comparisons=207659 pred_coverage=0.697803 compare_coverage=0.675973 residual_mean_m=0.0113026 residual_mean_abs_m=0.0437819 residual_max_abs_m=6.62366 warp_ms=2.04244 residual_ms=0.947929 total_ms=3.06049
+[Geometry G0-1] frame=8 ref=7 ref_valid=213354 projected=213354 zbuffer=212592 current_valid=214288 comparisons=206590 pred_coverage=0.692031 compare_coverage=0.672493 residual_mean_m=-0.0129075 residual_mean_abs_m=0.0467893 residual_max_abs_m=6.00566 warp_ms=1.96581 residual_ms=0.951264 total_ms=2.98973
+[Geometry G0-1] frame=9 ref=8 ref_valid=214288 projected=214288 zbuffer=213148 current_valid=215164 comparisons=206311 pred_coverage=0.693841 compare_coverage=0.671585 residual_mean_m=-0.014543 residual_mean_abs_m=0.0463285 residual_max_abs_m=6.38535 warp_ms=1.9962 residual_ms=0.702301 total_ms=2.74996
+[Geometry G0-1] frame=10 ref=9 ref_valid=215164 projected=215164 zbuffer=213590 current_valid=216334 comparisons=207940 pred_coverage=0.69528 compare_coverage=0.676888 residual_mean_m=0.00147981 residual_mean_abs_m=0.0395347 residual_max_abs_m=6.61472 warp_ms=2.00913 residual_ms=0.698176 total_ms=2.77085
+[Geometry G0-1] frame=11 ref=10 ref_valid=216334 projected=216334 zbuffer=214723 current_valid=214669 comparisons=206791 pred_coverage=0.698968 compare_coverage=0.673148 residual_mean_m=-0.0265042 residual_mean_abs_m=0.0644508 residual_max_abs_m=7.60682 warp_ms=2.02331 residual_ms=0.945797 total_ms=3.01852
+[Geometry G0-1] frame=12 ref=11 ref_valid=214669 projected=214592 zbuffer=212394 current_valid=217807 comparisons=202354 pred_coverage=0.691387 compare_coverage=0.658704 residual_mean_m=-0.0130417 residual_mean_abs_m=0.0738445 residual_max_abs_m=7.61318 warp_ms=1.95422 residual_ms=0.964775 total_ms=2.98318
+[Geometry G0-1] frame=13 ref=12 ref_valid=217807 projected=217660 zbuffer=214251 current_valid=222033 comparisons=206878 pred_coverage=0.697432 compare_coverage=0.673431 residual_mean_m=0.0010959 residual_mean_abs_m=0.0454951 residual_max_abs_m=5.38903 warp_ms=2.07177 residual_ms=0.96407 total_ms=3.10085
+[Geometry G0-1] frame=14 ref=13 ref_valid=222033 projected=222033 zbuffer=219263 current_valid=220249 comparisons=210925 pred_coverage=0.713747 compare_coverage=0.686605 residual_mean_m=-0.0266393 residual_mean_abs_m=0.070709 residual_max_abs_m=7.4893 warp_ms=2.08602 residual_ms=0.696263 total_ms=2.84437
+[Geometry G0-1] frame=15 ref=14 ref_valid=220249 projected=220249 zbuffer=218572 current_valid=220388 comparisons=210240 pred_coverage=0.711497 compare_coverage=0.684375 residual_mean_m=-0.0236855 residual_mean_abs_m=0.0500631 residual_max_abs_m=7.29031 warp_ms=2.02142 residual_ms=0.916834 total_ms=3.00142
+[Geometry G0-1] frame=16 ref=15 ref_valid=220388 projected=220267 zbuffer=215851 current_valid=224796 comparisons=207578 pred_coverage=0.70264 compare_coverage=0.67571 residual_mean_m=0.043812 residual_mean_abs_m=0.0983551 residual_max_abs_m=5.75375 warp_ms=2.10633 residual_ms=0.96391 total_ms=3.13112
+[Geometry G0-1] frame=17 ref=16 ref_valid=224796 projected=224796 zbuffer=221728 current_valid=225591 comparisons=215039 pred_coverage=0.721771 compare_coverage=0.699997 residual_mean_m=-0.0208093 residual_mean_abs_m=0.0637351 residual_max_abs_m=6.88106 warp_ms=2.11405 residual_ms=0.96182 total_ms=3.14477
+[Geometry G0-1] frame=18 ref=17 ref_valid=225591 projected=225591 zbuffer=221257 current_valid=224210 comparisons=214312 pred_coverage=0.720238 compare_coverage=0.69763 residual_mean_m=-0.017751 residual_mean_abs_m=0.0451634 residual_max_abs_m=5.66962 warp_ms=2.13635 residual_ms=0.708111 total_ms=2.91442
+[Geometry G0-1] frame=19 ref=18 ref_valid=224210 projected=224210 zbuffer=221507 current_valid=225344 comparisons=215492 pred_coverage=0.721051 compare_coverage=0.701471 residual_mean_m=0.0200361 residual_mean_abs_m=0.0574332 residual_max_abs_m=5.42816 warp_ms=2.0983 residual_ms=0.693549 total_ms=2.83907
+[Geometry G0-1] frame=20 ref=19 ref_valid=225344 projected=225344 zbuffer=222216 current_valid=224304 comparisons=216181 pred_coverage=0.723359 compare_coverage=0.703714 residual_mean_m=-0.0272777 residual_mean_abs_m=0.0667128 residual_max_abs_m=5.20018 warp_ms=2.11743 residual_ms=0.754541 total_ms=2.94367
+[Geometry G0-1] frame=21 ref=20 ref_valid=224304 projected=224304 zbuffer=222177 current_valid=225560 comparisons=216776 pred_coverage=0.723232 compare_coverage=0.705651 residual_mean_m=-0.00245909 residual_mean_abs_m=0.0418193 residual_max_abs_m=5.26154 warp_ms=2.08036 residual_ms=0.696579 total_ms=2.84083
+[Geometry G0-1] frame=22 ref=21 ref_valid=225560 projected=225560 zbuffer=223912 current_valid=225865 comparisons=218033 pred_coverage=0.72888 compare_coverage=0.709743 residual_mean_m=0.0296848 residual_mean_abs_m=0.0672418 residual_max_abs_m=6.23515 warp_ms=2.05166 residual_ms=0.884429 total_ms=3.21645
+[Geometry G0-1] frame=23 ref=22 ref_valid=225865 projected=225865 zbuffer=222978 current_valid=222646 comparisons=216222 pred_coverage=0.72584 compare_coverage=0.703848 residual_mean_m=-0.0175788 residual_mean_abs_m=0.0566601 residual_max_abs_m=6.33667 warp_ms=2.12246 residual_ms=0.700532 total_ms=2.89424
+[Geometry G0-1] frame=24 ref=23 ref_valid=222646 projected=222646 zbuffer=218992 current_valid=226372 comparisons=214833 pred_coverage=0.712865 compare_coverage=0.699326 residual_mean_m=0.00608475 residual_mean_abs_m=0.0459799 residual_max_abs_m=6.70443 warp_ms=2.09764 residual_ms=0.893942 total_ms=3.03967
+[Geometry G0-1] frame=25 ref=24 ref_valid=226372 projected=226372 zbuffer=225521 current_valid=227977 comparisons=219860 pred_coverage=0.734118 compare_coverage=0.71569 residual_mean_m=0.0186551 residual_mean_abs_m=0.0632829 residual_max_abs_m=6.73762 warp_ms=2.04448 residual_ms=0.679907 total_ms=2.7905
+[Geometry G0-1] frame=26 ref=25 ref_valid=227977 projected=227977 zbuffer=225436 current_valid=226320 comparisons=220173 pred_coverage=0.733841 compare_coverage=0.716709 residual_mean_m=-0.0164847 residual_mean_abs_m=0.0575852 residual_max_abs_m=6.12725 warp_ms=2.1324 residual_ms=0.685978 total_ms=2.87065
+[Geometry G0-1] frame=27 ref=26 ref_valid=226320 projected=226194 zbuffer=220464 current_valid=226320 comparisons=212582 pred_coverage=0.717656 compare_coverage=0.691999 residual_mean_m=0.00591726 residual_mean_abs_m=0.0872298 residual_max_abs_m=6.19951 warp_ms=2.16935 residual_ms=0.700474 total_ms=2.92641
+[Geometry G0-1] frame=28 ref=27 ref_valid=226320 projected=226320 zbuffer=222595 current_valid=229716 comparisons=218393 pred_coverage=0.724593 compare_coverage=0.710915 residual_mean_m=0.0167351 residual_mean_abs_m=0.0788081 residual_max_abs_m=6.32601 warp_ms=2.14033 residual_ms=0.936403 total_ms=3.14728
+[Geometry G0-1] frame=29 ref=28 ref_valid=229716 projected=229716 zbuffer=225203 current_valid=226883 comparisons=220245 pred_coverage=0.733083 compare_coverage=0.716943 residual_mean_m=-0.00636938 residual_mean_abs_m=0.0560062 residual_max_abs_m=6.25906 warp_ms=2.17933 residual_ms=0.688525 total_ms=2.93128
+[Geometry G0-1] frame=30 ref=29 ref_valid=226883 projected=226883 zbuffer=225841 current_valid=226889 comparisons=219188 pred_coverage=0.73516 compare_coverage=0.713503 residual_mean_m=-0.0314798 residual_mean_abs_m=0.0673703 residual_max_abs_m=6.66603 warp_ms=2.08437 residual_ms=0.942758 total_ms=3.09697
+[Geometry G0-1] frame=31 ref=30 ref_valid=226889 projected=226882 zbuffer=224530 current_valid=229137 comparisons=218280 pred_coverage=0.730892 compare_coverage=0.710547 residual_mean_m=0.0181637 residual_mean_abs_m=0.0779815 residual_max_abs_m=6.64169 warp_ms=2.11499 residual_ms=0.692045 total_ms=2.86658
+[Geometry G0-1] frame=32 ref=31 ref_valid=229137 projected=229137 zbuffer=223121 current_valid=231264 comparisons=220451 pred_coverage=0.726305 compare_coverage=0.717614 residual_mean_m=0.00907814 residual_mean_abs_m=0.0527598 residual_max_abs_m=6.19854 warp_ms=2.19737 residual_ms=0.987633 total_ms=3.25399
+[Geometry G0-1] frame=33 ref=32 ref_valid=231264 projected=231264 zbuffer=222222 current_valid=227176 comparisons=216147 pred_coverage=0.723379 compare_coverage=0.703604 residual_mean_m=-0.00919514 residual_mean_abs_m=0.0742023 residual_max_abs_m=6.18929 warp_ms=2.2355 residual_ms=0.676174 total_ms=2.98638
+[Geometry G0-1] frame=34 ref=33 ref_valid=227176 projected=226628 zbuffer=224715 current_valid=228598 comparisons=216881 pred_coverage=0.731494 compare_coverage=0.705993 residual_mean_m=-0.00135283 residual_mean_abs_m=0.0910992 residual_max_abs_m=6.61923 warp_ms=2.01867 residual_ms=0.745617 total_ms=2.82823
+[Geometry G0-1] frame=35 ref=34 ref_valid=228598 projected=228587 zbuffer=227546 current_valid=229727 comparisons=220047 pred_coverage=0.74071 compare_coverage=0.716299 residual_mean_m=0.0416563 residual_mean_abs_m=0.10447 residual_max_abs_m=6.77998 warp_ms=2.10135 residual_ms=0.949316 total_ms=3.11123
+[Geometry G0-1] frame=36 ref=35 ref_valid=229727 projected=229727 zbuffer=226998 current_valid=226475 comparisons=221155 pred_coverage=0.738926 compare_coverage=0.719906 residual_mean_m=0.0163828 residual_mean_abs_m=0.0519475 residual_max_abs_m=6.55549 warp_ms=2.07704 residual_ms=0.645225 total_ms=2.79354
+[Geometry G0-1] frame=37 ref=36 ref_valid=226475 projected=226475 zbuffer=224224 current_valid=222123 comparisons=215870 pred_coverage=0.729896 compare_coverage=0.702702 residual_mean_m=-0.0294083 residual_mean_abs_m=0.0798089 residual_max_abs_m=6.73269 warp_ms=2.10071 residual_ms=0.934024 total_ms=3.11002
+[Geometry G0-1] frame=38 ref=37 ref_valid=222123 projected=222123 zbuffer=218267 current_valid=222359 comparisons=212733 pred_coverage=0.710505 compare_coverage=0.69249 residual_mean_m=-0.0089871 residual_mean_abs_m=0.0583073 residual_max_abs_m=6.51903 warp_ms=2.09517 residual_ms=0.68429 total_ms=2.85067
+[Geometry G0-1] frame=39 ref=38 ref_valid=222359 projected=222359 zbuffer=221479 current_valid=217617 comparisons=212169 pred_coverage=0.72096 compare_coverage=0.690654 residual_mean_m=-0.0415321 residual_mean_abs_m=0.0725488 residual_max_abs_m=6.89737 warp_ms=2.03965 residual_ms=0.680011 total_ms=2.76582
+[Geometry G0-1] frame=40 ref=39 ref_valid=217617 projected=217617 zbuffer=215432 current_valid=215785 comparisons=209171 pred_coverage=0.701276 compare_coverage=0.680895 residual_mean_m=-0.00765148 residual_mean_abs_m=0.0404327 residual_max_abs_m=6.8311 warp_ms=2.03343 residual_ms=0.875006 total_ms=2.98148
+[Geometry G0-1] frame=41 ref=40 ref_valid=215785 projected=215785 zbuffer=213583 current_valid=214372 comparisons=209184 pred_coverage=0.695257 compare_coverage=0.680937 residual_mean_m=0.0100897 residual_mean_abs_m=0.0416595 residual_max_abs_m=7.05055 warp_ms=2.0199 residual_ms=0.932066 total_ms=3.01998
+[Geometry G0-1] frame=42 ref=41 ref_valid=214372 projected=214372 zbuffer=208116 current_valid=212582 comparisons=201222 pred_coverage=0.677461 compare_coverage=0.65502 residual_mean_m=-0.0277565 residual_mean_abs_m=0.0841741 residual_max_abs_m=6.79316 warp_ms=1.99353 residual_ms=0.653677 total_ms=2.71003
+[Geometry G0-1] frame=43 ref=42 ref_valid=212582 projected=212582 zbuffer=210426 current_valid=215687 comparisons=207092 pred_coverage=0.68498 compare_coverage=0.674128 residual_mean_m=-0.00562861 residual_mean_abs_m=0.05086 residual_max_abs_m=6.83781 warp_ms=1.98546 residual_ms=0.920906 total_ms=3.20158
+[Geometry G0-1] frame=44 ref=43 ref_valid=215687 projected=215685 zbuffer=211680 current_valid=217603 comparisons=204406 pred_coverage=0.689063 compare_coverage=0.665384 residual_mean_m=0.0371398 residual_mean_abs_m=0.0967378 residual_max_abs_m=6.86768 warp_ms=2.06277 residual_ms=0.938507 total_ms=3.07454
+[Geometry G0-1] frame=45 ref=44 ref_valid=217603 projected=217603 zbuffer=215609 current_valid=216918 comparisons=210159 pred_coverage=0.701852 compare_coverage=0.684111 residual_mean_m=-0.0092185 residual_mean_abs_m=0.0626182 residual_max_abs_m=6.60777 warp_ms=1.94623 residual_ms=0.648481 total_ms=2.65901
+[Geometry G0-1] frame=46 ref=45 ref_valid=216918 projected=216918 zbuffer=213938 current_valid=214003 comparisons=207815 pred_coverage=0.696413 compare_coverage=0.676481 residual_mean_m=-0.00146592 residual_mean_abs_m=0.0476672 residual_max_abs_m=6.96148 warp_ms=1.93658 residual_ms=0.65128 total_ms=2.65311
+[Geometry G0-1] frame=47 ref=46 ref_valid=214003 projected=214003 zbuffer=208947 current_valid=214230 comparisons=204271 pred_coverage=0.680166 compare_coverage=0.664945 residual_mean_m=0.0259466 residual_mean_abs_m=0.0612028 residual_max_abs_m=6.76924 warp_ms=2.07251 residual_ms=0.691315 total_ms=2.83186
+[Geometry G0-1] frame=48 ref=47 ref_valid=214230 projected=214230 zbuffer=207856 current_valid=213157 comparisons=200246 pred_coverage=0.676615 compare_coverage=0.651842 residual_mean_m=-0.0379719 residual_mean_abs_m=0.101599 residual_max_abs_m=6.93664 warp_ms=2.11826 residual_ms=0.689692 total_ms=2.87103
+[Geometry G0-1] frame=49 ref=48 ref_valid=213157 projected=213157 zbuffer=211415 current_valid=216297 comparisons=204952 pred_coverage=0.6882 compare_coverage=0.667161 residual_mean_m=-0.0483269 residual_mean_abs_m=0.08405 residual_max_abs_m=6.67749 warp_ms=1.99816 residual_ms=0.67295 total_ms=2.74435
+[RGBD Timing] End-to-end frame timing (measurement only)
+[RGBD Timing] image_io(ms): mean=9.37612 median=8.88909 p95=9.5612 min=8.52967 max=31.0238 n=50
+[RGBD Timing] tracking(ms): mean=14.6669 median=14.4768 p95=15.9273 min=13.4068 max=17.1671 n=50
+[RGBD Timing] active_total(ms): mean=24.0432 median=23.4724 p95=26.0518 min=22.1763 max=46.6865 n=50
+[RGBD Timing] sleep_actual(ms): mean=9.85313 median=9.28556 p95=13.1998 min=4e-05 max=14.6672 n=50
+[RGBD Timing] frame_wall(ms): mean=33.8511 median=32.2763 p95=36.2143 min=30.1418 max=46.6872 n=49
+[RGBD Timing] pacing_error(ms): mean=0.300241 median=0.137516 p95=0.180862 min=0.0550153 max=8.65325 n=49
+[RGBD Timing] deadline_overrun(ms): mean=0.17305 median=0 p95=0 min=0 max=8.65251 n=50
+[RGBD Timing] deadline_missed=1/50
+[RGBD Timing] sequence_wall(s)=1.69488
+[RGBD Timing] actual_fps=29.5411 dataset_fps=29.8055
+-------
+
+median tracking time: 0.0144768
+mean tracking time: 0.0146669
+
+Saving camera trajectory to CameraTrajectory.txt ...
+
+trajectory saved!
+
+Saving keyframe trajectory to KeyFrameTrajectory.txt ...
+
+trajectory saved!

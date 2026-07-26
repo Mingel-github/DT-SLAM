@@ -1,0 +1,63 @@
+
+ORB-SLAM2 Copyright (C) 2014-2016 Raul Mur-Artal, University of Zaragoza.
+This program comes with ABSOLUTELY NO WARRANTY;
+This is free software, and you are welcome to redistribute it
+under certain conditions. See LICENSE.txt.
+
+Input sensor was set to: RGB-D
+
+Loading ORB Vocabulary. This could take a while...
+Vocabulary loaded!
+
+
+Camera Parameters: 
+- fx: 535.4
+- fy: 539.2
+- cx: 320.1
+- cy: 247.6
+- k1: 0
+- k2: 0
+- p1: 0
+- p2: 0
+- fps: 30
+- color order: RGB (ignored if grayscale)
+
+ORB Extractor Parameters: 
+- Number of Features: 1000
+- Scale Levels: 8
+- Scale Factor: 1.2
+- Initial Fast Threshold: 20
+- Minimum Fast Threshold: 7
+
+Depth Threshold (Close/Far Points): 2.98842
+
+Geometry G0-1 Shadow: disabled
+
+-------
+Start processing sequence ...
+Images in the sequence: 50
+
+New map created with 732 points
+[RGBD Timing] End-to-end frame timing (measurement only)
+[RGBD Timing] image_io(ms): mean=8.43032 median=8.4436 p95=8.76206 min=8.05251 max=9.42549 n=50
+[RGBD Timing] tracking(ms): mean=11.598 median=11.3277 p95=15.2319 min=10.2711 max=15.9471 n=50
+[RGBD Timing] active_total(ms): mean=20.0284 median=19.6457 p95=23.6534 min=18.3381 max=24.4791 n=50
+[RGBD Timing] sleep_actual(ms): mean=13.7074 median=13.0769 p95=16.9367 min=8.09201 max=17.9484 n=50
+[RGBD Timing] frame_wall(ms): mean=33.6873 median=32.2752 p95=36.2166 min=30.2151 max=38.1438 n=49
+[RGBD Timing] pacing_error(ms): mean=0.136428 median=0.138406 p95=0.144738 min=0.0544348 max=0.231858 n=49
+[RGBD Timing] deadline_overrun(ms): mean=0 median=0 p95=0 min=0 max=0 n=50
+[RGBD Timing] deadline_missed=0/50
+[RGBD Timing] sequence_wall(s)=1.68686
+[RGBD Timing] actual_fps=29.6848 dataset_fps=29.8055
+-------
+
+median tracking time: 0.0113277
+mean tracking time: 0.011598
+
+Saving camera trajectory to CameraTrajectory.txt ...
+
+trajectory saved!
+
+Saving keyframe trajectory to KeyFrameTrajectory.txt ...
+
+trajectory saved!
