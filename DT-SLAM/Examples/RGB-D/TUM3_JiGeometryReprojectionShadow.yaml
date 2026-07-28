@@ -1,0 +1,53 @@
+%YAML:1.0
+
+# GJ-2 shadow-only Ji 2021 cluster reprojection statistics.
+# No cluster is classified as dynamic and no SLAM state is modified.
+
+Camera.fx: 535.4
+Camera.fy: 539.2
+Camera.cx: 320.1
+Camera.cy: 247.6
+
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 0
+
+JiGeometry.Enable: 1
+JiGeometry.EnableReprojectionStats: 1
+JiGeometry.Clusters: 24
+JiGeometry.KMeansMaxIterations: 20
+JiGeometry.KMeansEpsilon: 0.001
+JiGeometry.KMeansAttempts: 1
+JiGeometry.RandomSeed: 2021
+JiGeometry.LogEveryN: 10
+JiGeometry.DebugSave: 1
+JiGeometry.DebugEveryN: 10
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

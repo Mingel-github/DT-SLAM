@@ -13,6 +13,19 @@ logs/
 
 # Large binary data — not in git
 TUM/
+BONN/
 */Vocabulary/ORBvoc.txt
 *.tgz
 results/*.txt
+
+# Runtime trajectories, local test executables, and generated diagnostics
+DT-SLAM/CameraTrajectory*.txt
+DT-SLAM/KeyFrameTrajectory*.txt
+DT-SLAM/Examples/RGB-D/ji_geometry_test
+DT-SLAM/results/**/*.log
+DT-SLAM/results/**/*.txt
+results/**/*.csv
+results/**/*.json
+results/**/*.log
+results/**/*.png
+results/**/*.txt

@@ -38,8 +38,10 @@
 #include "MapDrawer.h"
 #include "System.h"
 #include "GeometricDynamicDetector.h"
+#include "JiGeometryBaseline.h"
 
 #include <mutex>
+#include <string>
 
 namespace ORB_SLAM2
 {
@@ -50,6 +52,37 @@ class Map;
 class LocalMapping;
 class LoopClosing;
 class System;
+
+struct GeometrySemanticProxyStats
+{
+    std::size_t semanticPixels = 0;
+    std::size_t validComparisonPixels = 0;
+    std::size_t semanticValidPixels = 0;
+    std::size_t positiveSeedPixels = 0;
+    std::size_t positiveInsideSemanticPixels = 0;
+    std::size_t positiveOutsideSemanticPixels = 0;
+    double semanticValidCoverage = 0.0;
+    double proxyPrecision = 0.0;
+    double conditionalRecall = 0.0;
+    double staticBackgroundFpr = 0.0;
+};
+
+struct GeometryFeatureShadowStats
+{
+    int radiusPixels = 0;
+    std::size_t featureCount = 0;
+    std::size_t semanticFeatureCount = 0;
+    std::size_t eligibleFeatureCount = 0;
+    std::size_t semanticEligibleFeatureCount = 0;
+    std::size_t candidateFeatureCount = 0;
+    std::size_t candidateInsideSemanticFeatureCount = 0;
+    std::size_t candidateOutsideSemanticFeatureCount = 0;
+    double eligibleCoverage = 0.0;
+    double semanticEligibleCoverage = 0.0;
+    double proxyPrecision = 0.0;
+    double conditionalRecall = 0.0;
+    double proxyBackgroundRate = 0.0;
+};
 
 class Tracking
 {  
@@ -62,6 +95,8 @@ public:
     cv::Mat GrabImageStereo(const cv::Mat &imRectLeft,const cv::Mat &imRectRight, const double &timestamp);
     cv::Mat GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const cv::Mat &mask, const double &timestamp);
     cv::Mat GrabImageMonocular(const cv::Mat &im, const double &timestamp);
+    void SetGroundTruthPoseForGeometry(const cv::Mat &TcwGroundTruth);
+    void SaveGeometryPoseDiagnostics();
 
     void SetLocalMapper(LocalMapping* pLocalMapper);
     void SetLoopClosing(LoopClosing* pLoopClosing);
@@ -146,6 +181,11 @@ protected:
     void UpdateDynamicFeaturesFromMask(Frame &frame, const cv::Mat &mask);
     int RemoveDynamicAssociations(Frame &frame);
     void RunGeometryShadow();
+    void SaveGeometryDebugImages(const GeometricWarpResult &result);
+    void RunJiGeometryShadow();
+    void SaveJiGeometryDebugImages(
+        const JiDepthClusteringResult &result);
+    void CaptureJiInitialTrackingSnapshot();
 
     bool NeedNewKeyFrame();
     void CreateNewKeyFrame();
@@ -204,12 +244,90 @@ protected:
     // For RGB-D inputs only. For some datasets (e.g. TUM) the depthmap values are scaled.
     float mDepthMapFactor;
 
-    // G0-1 geometry shadow state. It is read-only with respect to SLAM.
+    // G0 geometry shadow state. It is read-only with respect to SLAM.
     cv::Mat mCurrentDepthMeters;
+    cv::Mat mCurrentGeometryDebugImage;
+    cv::Mat mCurrentGroundTruthTcw;
+    cv::Mat mGeometryK;
     GeometricDynamicDetector mGeometricDetector;
+    GeometricDynamicDetector mGeometricGroundTruthDetector;
     bool mbGeometryShadowEnabled;
+    bool mbGeometryDebugSaveEnabled;
+    bool mbGeometryUsesDedicatedCameraModel;
     int mnGeometryLogEveryN;
+    int mnGeometryDebugEveryN;
+    std::string mGeometryDebugOutputDir;
+    std::string mGeometryPoseDiagnosticCsvPath;
+    std::string mGeometrySemanticProxyCsvPath;
+    std::string mGeometryFeatureShadowCsvPath;
     long unsigned int mnGeometryComputedFrames;
+
+    struct GeometryPoseDiagnosticRecord
+    {
+        long unsigned int frameId;
+        long unsigned int referenceFrameId;
+        double timestamp;
+        double referenceTimestamp;
+        GeometricWarpStats slam;
+        GeometricWarpStats groundTruth;
+    };
+    std::vector<GeometryPoseDiagnosticRecord> mvGeometryPoseDiagnostics;
+
+    struct GeometrySemanticProxyRecord
+    {
+        long unsigned int frameId;
+        long unsigned int referenceFrameId;
+        double timestamp;
+        bool hasGroundTruth;
+        GeometrySemanticProxyStats slam;
+        GeometrySemanticProxyStats groundTruth;
+    };
+    std::vector<GeometrySemanticProxyRecord> mvGeometrySemanticProxyDiagnostics;
+
+    struct GeometryFeatureShadowRecord
+    {
+        long unsigned int frameId;
+        long unsigned int referenceFrameId;
+        double timestamp;
+        bool groundTruthPose;
+        GeometryFeatureShadowStats stats;
+    };
+    std::vector<GeometryFeatureShadowRecord> mvGeometryFeatureShadowDiagnostics;
+
+    // GJ-1 Ji 2021 depth-clustering baseline. Shadow-only: labels and
+    // diagnostics must not affect tracking, mapping, or dynamic flags.
+    JiGeometryBaseline mJiGeometryBaseline;
+    bool mbJiGeometryShadowEnabled;
+    bool mbJiGeometryReprojectionStatsEnabled;
+    bool mbJiGeometryDebugSaveEnabled;
+    int mnJiGeometryLogEveryN;
+    int mnJiGeometryDebugEveryN;
+    std::string mJiGeometryDebugOutputDir;
+    std::string mJiGeometryClusterCsvPath;
+    std::string mJiGeometryReprojectionCsvPath;
+    long unsigned int mnJiGeometryComputedFrames;
+    cv::Mat mJiInitialTcw;
+    std::vector<JiReprojectionObservation> mvJiInitialObservations;
+
+    struct JiGeometryClusterRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        JiDepthClusteringStats frameStats;
+        JiDepthCluster cluster;
+    };
+    std::vector<JiGeometryClusterRecord> mvJiGeometryClusterDiagnostics;
+
+    struct JiGeometryReprojectionRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        JiDepthCluster depthCluster;
+        JiReprojectionFrameStats frameStats;
+        JiClusterReprojectionStats clusterStats;
+    };
+    std::vector<JiGeometryReprojectionRecord>
+        mvJiGeometryReprojectionDiagnostics;
 
     //Current matches in frame
     int mnMatchesInliers;

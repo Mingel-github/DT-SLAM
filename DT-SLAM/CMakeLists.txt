@@ -88,6 +88,7 @@ src/Initializer.cc
 src/Viewer.cc
 src/YOLOSegment.cc
 src/GeometricDynamicDetector.cc
+src/JiGeometryBaseline.cc
 )
 
 find_package(Threads REQUIRED)
@@ -112,6 +113,10 @@ target_link_libraries(rgbd_tum ${PROJECT_NAME})
 add_executable(geometric_warp_test
 Examples/RGB-D/geometric_warp_test.cc)
 target_link_libraries(geometric_warp_test ${PROJECT_NAME})
+
+add_executable(ji_geometry_test
+Examples/RGB-D/ji_geometry_test.cc)
+target_link_libraries(ji_geometry_test ${PROJECT_NAME})
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/Examples/Stereo)
 

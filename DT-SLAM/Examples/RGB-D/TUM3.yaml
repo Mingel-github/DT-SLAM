@@ -54,7 +54,7 @@ ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 
 #--------------------------------------------------------------------------------------------
-# G0-1 Geometry Shadow Parameters
+# G0 Geometry Shadow Parameters
 #--------------------------------------------------------------------------------------------
 
 # 0 keeps the frozen semantic/baseline tracking path unchanged.
@@ -62,6 +62,22 @@ Geometry.Enable: 0
 
 # Print the first result and then every N computed frames.
 Geometry.LogEveryN: 30
+
+# Provisional G0-2 diagnostic threshold in meters. Not a frozen method value.
+Geometry.ResidualThresholdM: 0.10
+
+# G0-3 depth-connected candidate generation. Disabled by default and shadow-only.
+Geometry.RegionGrowEnable: 0
+
+# Provisional maximum local depth difference between four-neighbor pixels.
+Geometry.RegionDepthThresholdM: 0.05
+
+# Diagnostic PNG output. The output directory must be provided through
+# DT_SLAM_GEOMETRY_DEBUG_DIR when this option is enabled.
+Geometry.DebugSave: 0
+
+# Save the first result and then every N computed geometry frames.
+Geometry.DebugEveryN: 30
 
 #--------------------------------------------------------------------------------------------
 # Viewer Parameters

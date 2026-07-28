@@ -24,10 +24,14 @@
 #include<cmath>
 #include<cstdlib>
 #include<fstream>
+#include<iomanip>
 #include<chrono>
+#include<sstream>
+#include<stdexcept>
 #include<unistd.h>
 
 #include<opencv2/core/core.hpp>
+#include<Eigen/Geometry>
 
 #include<System.h>
 #include<YOLOSegment.h>
@@ -36,6 +40,21 @@ using namespace std;
 
 void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageFilenamesRGB,
                 vector<string> &vstrImageFilenamesD, vector<double> &vTimestamps);
+
+struct GroundTruthSample
+{
+    double timestamp;
+    Eigen::Vector3d translationWorldCamera;
+    Eigen::Quaterniond rotationWorldCamera;
+};
+
+void LoadGroundTruth(const string &filename,
+                     vector<GroundTruthSample> &samples);
+bool InterpolateGroundTruthTcw(
+    const vector<GroundTruthSample> &samples,
+    const double timestamp,
+    const double maxBracketDeltaSeconds,
+    cv::Mat &Tcw);
 
 void PrintTimingSummary(const string &name, const vector<double> &samples)
 {
@@ -90,10 +109,60 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    vector<cv::Mat> vGroundTruthTcw;
+    const char *groundTruthPath = std::getenv("DT_SLAM_GT_TRAJECTORY");
+    if(groundTruthPath && groundTruthPath[0]!='\0')
+    {
+        double maxGroundTruthDeltaSeconds = 0.02;
+        const char *maxGroundTruthDelta =
+            std::getenv("DT_SLAM_GT_MAX_BRACKET_DELTA_S");
+        if(maxGroundTruthDelta && maxGroundTruthDelta[0]!='\0')
+        {
+            maxGroundTruthDeltaSeconds = std::stod(maxGroundTruthDelta);
+            if(!std::isfinite(maxGroundTruthDeltaSeconds) ||
+               maxGroundTruthDeltaSeconds<=0.0)
+            {
+                throw std::invalid_argument(
+                    "DT_SLAM_GT_MAX_BRACKET_DELTA_S must be finite and positive");
+            }
+        }
+
+        vector<GroundTruthSample> groundTruthSamples;
+        LoadGroundTruth(groundTruthPath,groundTruthSamples);
+        vGroundTruthTcw.resize(nImages);
+        int availableGroundTruthFrames = 0;
+        for(int index=0; index<nImages; ++index)
+        {
+            if(InterpolateGroundTruthTcw(
+                   groundTruthSamples,vTimestamps[index],
+                   maxGroundTruthDeltaSeconds,vGroundTruthTcw[index]))
+            {
+                ++availableGroundTruthFrames;
+            }
+        }
+        cout << "[Geometry G0-2P] GT trajectory: " << groundTruthPath << endl;
+        cout << "[Geometry G0-2P] text convention: Twc; detector input: Tcw"
+             << endl;
+        cout << "[Geometry G0-2P] interpolation available: "
+             << availableGroundTruthFrames << "/" << nImages
+             << ", max bracket delta: " << maxGroundTruthDeltaSeconds
+             << " s" << endl;
+    }
+
     // DT-SLAM: 初始化语义线程
     ORB_SLAM2::YOLOSegment* pYOLO = nullptr;
     int nMaskReady = 0;
     vector<int> vMaskAges; // mask年龄统计（帧延时）
+    const char *precomputedMaskDirEnv =
+        std::getenv("DT_SLAM_PRECOMPUTED_MASK_DIR");
+    const string precomputedMaskDir =
+        precomputedMaskDirEnv ? string(precomputedMaskDirEnv) : string();
+    if(!precomputedMaskDir.empty() && argc==6)
+    {
+        cerr << "[DT-SLAM] Precomputed diagnostic masks and online ONNX "
+             << "inference cannot be enabled together" << endl;
+        return 1;
+    }
     if(argc == 6 && string(argv[5]).find(".onnx") != string::npos)
     {
         try
@@ -125,6 +194,11 @@ int main(int argc, char **argv)
             }
             cout << "[DT-SLAM] 首帧mask就绪，开始跟踪" << endl;
         }
+    }
+    else if(!precomputedMaskDir.empty())
+    {
+        cout << "[DT-SLAM] Using precomputed diagnostic masks from: "
+             << precomputedMaskDir << endl;
     }
 
     // Create SLAM system. Headless runs can disable Pangolin without changing
@@ -257,6 +331,26 @@ int main(int argc, char **argv)
             nMaskReady++;
             vMaskAges.push_back(ni-pYOLO->GetMaskSeq());
         }
+        else if(!precomputedMaskDir.empty())
+        {
+            std::ostringstream maskFilename;
+            maskFilename << precomputedMaskDir;
+            if(precomputedMaskDir[precomputedMaskDir.size()-1]!='/')
+                maskFilename << "/";
+            maskFilename << "frame_" << std::setfill('0') << std::setw(6)
+                         << ni << ".png";
+            mask = cv::imread(maskFilename.str(),cv::IMREAD_GRAYSCALE);
+            if(mask.empty() || mask.type()!=CV_8UC1 ||
+               mask.size()!=imRGB.size())
+            {
+                cerr << "[DT-SLAM] Invalid precomputed diagnostic mask for "
+                     << "frame " << ni << ": " << maskFilename.str() << endl;
+                SLAM.Shutdown();
+                return 1;
+            }
+            nMaskReady++;
+            vMaskAges.push_back(0);
+        }
 
 #ifdef COMPILEDWITHC11
         std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
@@ -265,7 +359,9 @@ int main(int argc, char **argv)
 #endif
 
         // Pass the image to the SLAM system
-        SLAM.TrackRGBD(imRGB,imD,mask,tframe);
+        const cv::Mat groundTruthTcw =
+            vGroundTruthTcw.empty() ? cv::Mat() : vGroundTruthTcw[ni];
+        SLAM.TrackRGBD(imRGB,imD,mask,tframe,groundTruthTcw);
 
 #ifdef COMPILEDWITHC11
         std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
@@ -391,24 +487,162 @@ void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageF
 {
     ifstream fAssociation;
     fAssociation.open(strAssociationFilename.c_str());
-    while(!fAssociation.eof())
-    {
-        string s;
-        getline(fAssociation,s);
-        if(!s.empty())
-        {
-            stringstream ss;
-            ss << s;
-            double t;
-            string sRGB, sD;
-            ss >> t;
-            vTimestamps.push_back(t);
-            ss >> sRGB;
-            vstrImageFilenamesRGB.push_back(sRGB);
-            ss >> t;
-            ss >> sD;
-            vstrImageFilenamesD.push_back(sD);
+    if(!fAssociation.is_open())
+        throw runtime_error("Failed to open RGB-D association file: "+strAssociationFilename);
 
+    string s;
+    int lineNumber = 0;
+    while(getline(fAssociation,s))
+    {
+        ++lineNumber;
+        const string::size_type first = s.find_first_not_of(" \t\r");
+        if(first==string::npos || s[first]=='#')
+            continue;
+
+        stringstream ss(s);
+        double timestampRGB = 0.0;
+        double timestampDepth = 0.0;
+        string filenameRGB;
+        string filenameDepth;
+        if(!(ss >> timestampRGB >> filenameRGB >>
+             timestampDepth >> filenameDepth))
+        {
+            throw runtime_error(
+                "Malformed RGB-D association at line "+
+                to_string(lineNumber)+": "+s);
         }
+
+        vTimestamps.push_back(timestampRGB);
+        vstrImageFilenamesRGB.push_back(filenameRGB);
+        vstrImageFilenamesD.push_back(filenameDepth);
     }
+}
+
+void LoadGroundTruth(const string &filename,
+                     vector<GroundTruthSample> &samples)
+{
+    ifstream stream(filename.c_str());
+    if(!stream.is_open())
+        throw runtime_error("Failed to open ground-truth trajectory: "+filename);
+
+    string line;
+    int lineNumber = 0;
+    while(getline(stream,line))
+    {
+        ++lineNumber;
+        const string::size_type first = line.find_first_not_of(" \t\r");
+        if(first==string::npos || line[first]=='#')
+            continue;
+
+        stringstream fields(line);
+        double tx, ty, tz, qx, qy, qz, qw;
+        GroundTruthSample sample;
+        if(!(fields >> sample.timestamp >> tx >> ty >> tz >>
+             qx >> qy >> qz >> qw))
+        {
+            throw runtime_error(
+                "Malformed ground-truth pose at line "+
+                to_string(lineNumber)+": "+line);
+        }
+        if(!std::isfinite(sample.timestamp) ||
+           !std::isfinite(tx) || !std::isfinite(ty) || !std::isfinite(tz) ||
+           !std::isfinite(qx) || !std::isfinite(qy) ||
+           !std::isfinite(qz) || !std::isfinite(qw))
+        {
+            throw runtime_error(
+                "Non-finite ground-truth pose at line "+to_string(lineNumber));
+        }
+
+        sample.translationWorldCamera = Eigen::Vector3d(tx,ty,tz);
+        sample.rotationWorldCamera = Eigen::Quaterniond(qw,qx,qy,qz);
+        const double quaternionNorm = sample.rotationWorldCamera.norm();
+        if(quaternionNorm<=1e-12)
+        {
+            throw runtime_error(
+                "Invalid ground-truth quaternion at line "+to_string(lineNumber));
+        }
+        sample.rotationWorldCamera.normalize();
+        samples.push_back(sample);
+    }
+
+    if(samples.empty())
+        throw runtime_error("Ground-truth trajectory contains no poses: "+filename);
+    sort(samples.begin(),samples.end(),
+         [](const GroundTruthSample &left, const GroundTruthSample &right)
+         {
+             return left.timestamp<right.timestamp;
+         });
+}
+
+bool InterpolateGroundTruthTcw(
+    const vector<GroundTruthSample> &samples,
+    const double timestamp,
+    const double maxBracketDeltaSeconds,
+    cv::Mat &Tcw)
+{
+    Tcw.release();
+    if(samples.empty() || timestamp<samples.front().timestamp ||
+       timestamp>samples.back().timestamp)
+    {
+        return false;
+    }
+
+    const vector<GroundTruthSample>::const_iterator upper =
+        lower_bound(
+            samples.begin(),samples.end(),timestamp,
+            [](const GroundTruthSample &sample, const double value)
+            {
+                return sample.timestamp<value;
+            });
+
+    Eigen::Vector3d translationWorldCamera;
+    Eigen::Quaterniond rotationWorldCamera;
+    if(upper!=samples.end() &&
+       std::abs(upper->timestamp-timestamp)<=1e-9)
+    {
+        translationWorldCamera = upper->translationWorldCamera;
+        rotationWorldCamera = upper->rotationWorldCamera;
+    }
+    else
+    {
+        if(upper==samples.begin() || upper==samples.end())
+            return false;
+        const GroundTruthSample &after = *upper;
+        const GroundTruthSample &before = *(upper-1);
+        const double beforeDelta = timestamp-before.timestamp;
+        const double afterDelta = after.timestamp-timestamp;
+        const double interval = after.timestamp-before.timestamp;
+        if(beforeDelta<0.0 || afterDelta<0.0 || interval<=0.0 ||
+           beforeDelta>maxBracketDeltaSeconds ||
+           afterDelta>maxBracketDeltaSeconds)
+        {
+            return false;
+        }
+
+        const double alpha = beforeDelta/interval;
+        translationWorldCamera =
+            (1.0-alpha)*before.translationWorldCamera+
+            alpha*after.translationWorldCamera;
+        rotationWorldCamera =
+            before.rotationWorldCamera.slerp(
+                alpha,after.rotationWorldCamera).normalized();
+    }
+
+    const Eigen::Matrix3d rotationCameraWorld =
+        rotationWorldCamera.toRotationMatrix().transpose();
+    const Eigen::Vector3d translationCameraWorld =
+        -rotationCameraWorld*translationWorldCamera;
+
+    Tcw = cv::Mat::eye(4,4,CV_32F);
+    for(int row=0; row<3; ++row)
+    {
+        for(int col=0; col<3; ++col)
+        {
+            Tcw.at<float>(row,col) =
+                static_cast<float>(rotationCameraWorld(row,col));
+        }
+        Tcw.at<float>(row,3) =
+            static_cast<float>(translationCameraWorld(row));
+    }
+    return true;
 }

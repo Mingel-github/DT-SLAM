@@ -165,7 +165,9 @@ cv::Mat System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const
     return Tcw;
 }
 
-cv::Mat System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const cv::Mat &mask, const double &timestamp)
+cv::Mat System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap,
+                          const cv::Mat &mask, const double &timestamp,
+                          const cv::Mat &TcwGroundTruth)
 {
     if(mSensor!=RGBD)
     {
@@ -207,6 +209,7 @@ cv::Mat System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const cv::
     }
     }
 
+    mpTracker->SetGroundTruthPoseForGeometry(TcwGroundTruth);
     cv::Mat Tcw = mpTracker->GrabImageRGBD(im,depthmap,mask,timestamp);
 
     unique_lock<mutex> lock2(mMutexState);
@@ -315,6 +318,8 @@ void System::Shutdown()
     {
         usleep(5000);
     }
+
+    mpTracker->SaveGeometryPoseDiagnostics();
 
     if(mpViewer)
         pangolin::BindToContext("ORB-SLAM2: Map Viewer");
