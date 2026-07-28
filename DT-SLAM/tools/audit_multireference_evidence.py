@@ -10,8 +10,9 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def read_histogram(path):
+def read_histogram(path, sampling_policy=None):
     frames = defaultdict(list)
+    observed_sampling_policies = set()
     with open(path, newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
         required = {
@@ -26,7 +27,15 @@ def read_histogram(path):
         missing = required.difference(reader.fieldnames or [])
         if missing:
             raise ValueError(f"{path}: missing columns {sorted(missing)}")
+        if sampling_policy and "sampling_policy" not in (reader.fieldnames or []):
+            raise ValueError(
+                f"{path}: --sampling-policy requires a sampling_policy column"
+            )
         for row in reader:
+            if "sampling_policy" in row:
+                observed_sampling_policies.add(row["sampling_policy"])
+            if sampling_policy and row["sampling_policy"] != sampling_policy:
+                continue
             parsed = {
                 "frame": int(row["frame"]),
                 "reference_count": int(row["reference_count"]),
@@ -45,6 +54,11 @@ def read_histogram(path):
             ):
                 raise ValueError(f"{path}: invalid histogram row {row}")
             frames[parsed["frame"]].append(parsed)
+    if not sampling_policy and len(observed_sampling_policies) > 1:
+        raise ValueError(
+            f"{path}: mixed sampling policies "
+            f"{sorted(observed_sampling_policies)}; use --sampling-policy"
+        )
     if not frames:
         raise ValueError(f"{path}: no histogram rows")
     return frames
@@ -116,15 +130,21 @@ def main():
     parser.add_argument("--dynamic", required=True)
     parser.add_argument("--static", required=True)
     parser.add_argument("--low-dynamic")
+    parser.add_argument(
+        "--sampling-policy",
+        help="optional sampling_policy value for mixed-policy histogram CSVs",
+    )
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
 
     datasets = {
-        "dynamic": read_histogram(args.dynamic),
-        "static": read_histogram(args.static),
+        "dynamic": read_histogram(args.dynamic, args.sampling_policy),
+        "static": read_histogram(args.static, args.sampling_policy),
     }
     if args.low_dynamic:
-        datasets["low_dynamic"] = read_histogram(args.low_dynamic)
+        datasets["low_dynamic"] = read_histogram(
+            args.low_dynamic, args.sampling_policy
+        )
 
     reference_counts = {
         row["reference_count"]
@@ -158,6 +178,7 @@ def main():
 
     summary = {
         "scope": "G2-1 shadow-only; YOLO person masks are proxies, not motion ground truth",
+        "sampling_policy": args.sampling_policy,
         "reference_count": reference_count,
         "inputs": {
             "dynamic": str(Path(args.dynamic).resolve()),

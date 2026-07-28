@@ -91,8 +91,19 @@ struct GeometricReferenceFrame
 {
     cv::Mat depthMeters;
     cv::Mat Tcw;
+    // G2-2S raw RGB/depth-domain ORB pixels with valid static depth.
+    std::vector<cv::Point2i> featureDepthPixels;
+    // G2-2G raw RGB/depth-domain regular-grid pixels with valid static depth.
+    std::vector<cv::Point2i> gridDepthPixels;
     long unsigned int frameId = 0;
     double timestampSeconds = 0.0;
+};
+
+enum class GeometricReferenceSamplingPolicy
+{
+    Dense,
+    OrbDepth,
+    GridDepth
 };
 
 struct GeometricReferenceSelectionStats
@@ -137,6 +148,35 @@ struct GeometricMultiReferenceResult
     cv::Mat consistentCount;
     std::vector<GeometricPerReferenceStats> perReference;
     GeometricMultiReferenceStats stats;
+};
+
+struct GeometricRegionPartitionStats
+{
+    std::size_t validDepthPixels = 0;
+    std::size_t boundaryPixels = 0;
+    std::size_t assignedRegionPixels = 0;
+    std::size_t regionCount = 0;
+    std::size_t largestRegionPixels = 0;
+    std::size_t topFiveRegionPixels = 0;
+    std::size_t singletonRegionCount = 0;
+    std::size_t smallRegionCount = 0;
+    double boundaryValidRatio = 0.0;
+    double assignedValidRatio = 0.0;
+    double largestRegionValidRatio = 0.0;
+    double topFiveRegionValidRatio = 0.0;
+    double totalMs = 0.0;
+};
+
+struct GeometricRegionPartitionResult
+{
+    // CV_8UC1. 255 is a depth-discontinuity boundary.
+    cv::Mat boundaryMask;
+
+    // CV_32SC1. -1 is invalid depth, -2 is a boundary, and non-negative
+    // values are connected region labels. No label is a motion decision.
+    cv::Mat labels;
+    std::vector<std::size_t> regionSizes;
+    GeometricRegionPartitionStats stats;
 };
 
 class GeometricDynamicDetector
@@ -189,7 +229,9 @@ public:
         const cv::Mat &currentDepthMeters,
         const cv::Mat &TcwCurrent,
         const cv::Mat &K,
-        const float residualThresholdMeters);
+        const float residualThresholdMeters,
+        const GeometricReferenceSamplingPolicy samplingPolicy =
+            GeometricReferenceSamplingPolicy::Dense);
 
     // G2-2R pure selection helper. Candidate frame ids must already be
     // ordered by the caller's reference policy. Missing cache entries remain
@@ -198,6 +240,16 @@ public:
         const std::vector<GeometricReferenceFrame> &cachedReferences,
         const std::vector<long unsigned int> &orderedCandidateFrameIds,
         const std::size_t maximumReferences);
+
+    // G2-3R0 shadow-only region representation. The depth boundary follows
+    // the SInDSLAM relative-plus-absolute threshold form, while connected
+    // components are a lightweight adaptation rather than a reproduction of
+    // its full K-means, plane-edge, and re-clustering pipeline.
+    static GeometricRegionPartitionResult PartitionDepthByDiscontinuity(
+        const cv::Mat &depthMeters,
+        const float relativeThreshold,
+        const float absoluteThresholdMeters,
+        const std::size_t smallRegionMaximumPixels = 64);
 
 private:
     cv::Mat mK;

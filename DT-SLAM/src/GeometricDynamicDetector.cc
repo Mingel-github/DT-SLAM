@@ -12,8 +12,10 @@
 #include <chrono>
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ORB_SLAM2
@@ -53,6 +55,267 @@ void ValidateCameraMatrix(const cv::Mat &K)
 bool IsValidDepth(const float depth)
 {
     return std::isfinite(depth) && depth>0.0f;
+}
+
+GeometricWarpStats AccumulateSampledReferenceEvidence(
+    const GeometricReferenceFrame &reference,
+    const std::vector<cv::Point2i> &samplePixels,
+    const cv::Mat &currentDepthMeters,
+    const cv::Mat &TcwCurrent,
+    const cv::Mat &K,
+    const float residualThresholdMeters,
+    cv::Mat &comparisonCount,
+    cv::Mat &positiveCount,
+    cv::Mat &negativeCount,
+    cv::Mat &consistentCount)
+{
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+    const cv::Mat Kf = AsFloatMatrix(K);
+    const cv::Mat TCurrentReference =
+        AsFloatMatrix(TcwCurrent)*AsFloatMatrix(reference.Tcw).inv();
+
+    const float fx = Kf.at<float>(0,0);
+    const float fy = Kf.at<float>(1,1);
+    const float cx = Kf.at<float>(0,2);
+    const float cy = Kf.at<float>(1,2);
+    if(!std::isfinite(fx) || !std::isfinite(fy) ||
+       !std::isfinite(cx) || !std::isfinite(cy) ||
+       fx<=0.0f || fy<=0.0f)
+    {
+        throw std::invalid_argument(
+            "K contains invalid pinhole intrinsics");
+    }
+    const float r00 = TCurrentReference.at<float>(0,0);
+    const float r01 = TCurrentReference.at<float>(0,1);
+    const float r02 = TCurrentReference.at<float>(0,2);
+    const float tx = TCurrentReference.at<float>(0,3);
+    const float r10 = TCurrentReference.at<float>(1,0);
+    const float r11 = TCurrentReference.at<float>(1,1);
+    const float r12 = TCurrentReference.at<float>(1,2);
+    const float ty = TCurrentReference.at<float>(1,3);
+    const float r20 = TCurrentReference.at<float>(2,0);
+    const float r21 = TCurrentReference.at<float>(2,1);
+    const float r22 = TCurrentReference.at<float>(2,2);
+    const float tz = TCurrentReference.at<float>(2,3);
+
+    GeometricWarpStats stats;
+    const bool useContiguousZBuffer = samplePixels.size()>=4096;
+    std::unordered_map<int,float> predictedDepthByPixel;
+    std::vector<float> contiguousPredictedDepth;
+    std::vector<int> touchedTargetPixels;
+    if(useContiguousZBuffer)
+    {
+        contiguousPredictedDepth.assign(
+            currentDepthMeters.total(),
+            std::numeric_limits<float>::infinity());
+        touchedTargetPixels.reserve(samplePixels.size());
+    }
+    else
+    {
+        predictedDepthByPixel.reserve(
+            samplePixels.size()*2+1);
+    }
+
+    const std::chrono::steady_clock::time_point warpStart =
+        std::chrono::steady_clock::now();
+    for(std::size_t sampleIndex=0;
+        sampleIndex<samplePixels.size(); ++sampleIndex)
+    {
+        const cv::Point2i &pixel = samplePixels[sampleIndex];
+        if(pixel.x<0 || pixel.x>=reference.depthMeters.cols ||
+           pixel.y<0 || pixel.y>=reference.depthMeters.rows)
+        {
+            continue;
+        }
+
+        const float depth =
+            reference.depthMeters.at<float>(pixel.y,pixel.x);
+        if(!IsValidDepth(depth))
+            continue;
+        ++stats.referenceValidPixels;
+
+        const float xReference =
+            (static_cast<float>(pixel.x)-cx)*depth/fx;
+        const float yReference =
+            (static_cast<float>(pixel.y)-cy)*depth/fy;
+        const float xCurrent =
+            r00*xReference+r01*yReference+r02*depth+tx;
+        const float yCurrent =
+            r10*xReference+r11*yReference+r12*depth+ty;
+        const float zCurrent =
+            r20*xReference+r21*yReference+r22*depth+tz;
+        if(!IsValidDepth(zCurrent))
+            continue;
+
+        const float projectedU = fx*xCurrent/zCurrent+cx;
+        const float projectedV = fy*yCurrent/zCurrent+cy;
+        if(!std::isfinite(projectedU) ||
+           !std::isfinite(projectedV) ||
+           projectedU<0.0f ||
+           projectedU>
+               static_cast<float>(currentDepthMeters.cols-1) ||
+           projectedV<0.0f ||
+           projectedV>
+               static_cast<float>(currentDepthMeters.rows-1))
+        {
+            continue;
+        }
+
+        const int targetU = cvRound(projectedU);
+        const int targetV = cvRound(projectedV);
+        if(targetU<0 || targetU>=currentDepthMeters.cols ||
+           targetV<0 || targetV>=currentDepthMeters.rows)
+        {
+            continue;
+        }
+        ++stats.projectedSamples;
+
+        const int targetIndex =
+            targetV*currentDepthMeters.cols+targetU;
+        if(useContiguousZBuffer)
+        {
+            float &existing =
+                contiguousPredictedDepth[
+                    static_cast<std::size_t>(targetIndex)];
+            if(!std::isfinite(existing))
+            {
+                existing = zCurrent;
+                touchedTargetPixels.push_back(targetIndex);
+            }
+            else if(zCurrent<existing)
+            {
+                existing = zCurrent;
+            }
+        }
+        else
+        {
+            const std::unordered_map<int,float>::iterator existing =
+                predictedDepthByPixel.find(targetIndex);
+            if(existing==predictedDepthByPixel.end())
+            {
+                predictedDepthByPixel.insert(
+                    std::make_pair(targetIndex,zCurrent));
+            }
+            else if(zCurrent<existing->second)
+            {
+                existing->second = zCurrent;
+            }
+        }
+    }
+    const std::chrono::steady_clock::time_point warpEnd =
+        std::chrono::steady_clock::now();
+
+    stats.zbufferValidPixels =
+        useContiguousZBuffer
+            ? touchedTargetPixels.size()
+            : predictedDepthByPixel.size();
+    double residualSum = 0.0;
+    double residualAbsSum = 0.0;
+    double residualMaxAbs = 0.0;
+    const auto classifyPrediction =
+        [&](const int targetIndex,const float predictedDepth)
+        {
+        const int targetV = targetIndex/currentDepthMeters.cols;
+        const int targetU = targetIndex%currentDepthMeters.cols;
+        const float current =
+            currentDepthMeters.at<float>(targetV,targetU);
+        if(!IsValidDepth(current))
+            return;
+
+        ++stats.currentValidPixels;
+        ++stats.validComparisons;
+        ++comparisonCount.at<unsigned char>(targetV,targetU);
+        const float residual = predictedDepth-current;
+        residualSum += residual;
+        const double residualAbs =
+            std::abs(static_cast<double>(residual));
+        residualAbsSum += residualAbs;
+        residualMaxAbs =
+            std::max(residualMaxAbs,residualAbs);
+
+        if(residual>residualThresholdMeters)
+        {
+            ++positiveCount.at<unsigned char>(targetV,targetU);
+            ++stats.positiveSeedPixels;
+        }
+        else if(residual<-residualThresholdMeters)
+        {
+            ++negativeCount.at<unsigned char>(targetV,targetU);
+            ++stats.negativeDiagnosticPixels;
+        }
+        else
+        {
+            ++consistentCount.at<unsigned char>(targetV,targetU);
+            ++stats.consistentEvidencePixels;
+        }
+        };
+    if(useContiguousZBuffer)
+    {
+        for(std::size_t touchedIndex=0;
+            touchedIndex<touchedTargetPixels.size(); ++touchedIndex)
+        {
+            const int targetIndex =
+                touchedTargetPixels[touchedIndex];
+            classifyPrediction(
+                targetIndex,
+                contiguousPredictedDepth[
+                    static_cast<std::size_t>(targetIndex)]);
+        }
+    }
+    else
+    {
+        for(std::unordered_map<int,float>::const_iterator
+                prediction=predictedDepthByPixel.begin();
+            prediction!=predictedDepthByPixel.end(); ++prediction)
+        {
+            classifyPrediction(prediction->first,prediction->second);
+        }
+    }
+    const std::chrono::steady_clock::time_point evidenceEnd =
+        std::chrono::steady_clock::now();
+
+    const double imagePixels =
+        static_cast<double>(currentDepthMeters.total());
+    if(imagePixels>0.0)
+    {
+        stats.predictionCoverageRatio =
+            static_cast<double>(stats.zbufferValidPixels)/
+            imagePixels;
+        stats.comparisonCoverageRatio =
+            static_cast<double>(stats.validComparisons)/
+            imagePixels;
+    }
+    if(stats.validComparisons>0)
+    {
+        const double validComparisons =
+            static_cast<double>(stats.validComparisons);
+        stats.consistentEvidenceRatio =
+            static_cast<double>(
+                stats.consistentEvidencePixels)/
+            validComparisons;
+        stats.positiveSeedRatio =
+            static_cast<double>(stats.positiveSeedPixels)/
+            validComparisons;
+        stats.negativeDiagnosticRatio =
+            static_cast<double>(
+                stats.negativeDiagnosticPixels)/
+            validComparisons;
+        stats.residualMean = residualSum/validComparisons;
+        stats.residualMeanAbs =
+            residualAbsSum/validComparisons;
+        stats.residualMaxAbs = residualMaxAbs;
+    }
+    stats.warpMs =
+        std::chrono::duration<double,std::milli>(
+            warpEnd-warpStart).count();
+    stats.evidenceMs =
+        std::chrono::duration<double,std::milli>(
+            evidenceEnd-warpEnd).count();
+    stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            evidenceEnd-totalStart).count();
+    return stats;
 }
 
 } // namespace
@@ -650,7 +913,8 @@ GeometricDynamicDetector::ComputeMultiReferenceEvidence(
     const cv::Mat &currentDepthMeters,
     const cv::Mat &TcwCurrent,
     const cv::Mat &K,
-    const float residualThresholdMeters)
+    const float residualThresholdMeters,
+    const GeometricReferenceSamplingPolicy samplingPolicy)
 {
     const std::chrono::steady_clock::time_point totalStart =
         std::chrono::steady_clock::now();
@@ -696,52 +960,69 @@ GeometricDynamicDetector::ComputeMultiReferenceEvidence(
                 "multi-reference and current depth images must have the same size");
         }
 
-        GeometricWarpResult single = ComputeWarp(
-            reference.depthMeters,currentDepthMeters,reference.Tcw,
-            TcwCurrent,K);
-        ClassifyEvidence(single,residualThresholdMeters);
-        warpAndEvidenceMs += single.stats.totalMs;
         GeometricPerReferenceStats perReference;
         perReference.frameId = reference.frameId;
-        perReference.warp = single.stats;
-        result.perReference.push_back(perReference);
-
-        for(int v=0; v<currentDepthMeters.rows; ++v)
+        if(samplingPolicy==GeometricReferenceSamplingPolicy::OrbDepth ||
+           samplingPolicy==GeometricReferenceSamplingPolicy::GridDepth)
         {
-            const unsigned char *validRow =
-                single.validComparisonMask.ptr<unsigned char>(v);
-            const unsigned char *positiveRow =
-                single.positiveSeedMask.ptr<unsigned char>(v);
-            const unsigned char *negativeRow =
-                single.negativeDiagnosticMask.ptr<unsigned char>(v);
-            const unsigned char *consistentRow =
-                single.consistentEvidenceMask.ptr<unsigned char>(v);
-            unsigned char *comparisonCountRow =
-                result.comparisonCount.ptr<unsigned char>(v);
-            unsigned char *positiveCountRow =
-                result.positiveCount.ptr<unsigned char>(v);
-            unsigned char *negativeCountRow =
-                result.negativeCount.ptr<unsigned char>(v);
-            unsigned char *consistentCountRow =
-                result.consistentCount.ptr<unsigned char>(v);
+            const std::vector<cv::Point2i> &samplePixels =
+                samplingPolicy==GeometricReferenceSamplingPolicy::OrbDepth
+                    ? reference.featureDepthPixels
+                    : reference.gridDepthPixels;
+            perReference.warp =
+                AccumulateSampledReferenceEvidence(
+                    reference,samplePixels,currentDepthMeters,TcwCurrent,K,
+                    residualThresholdMeters,result.comparisonCount,
+                    result.positiveCount,result.negativeCount,
+                    result.consistentCount);
+        }
+        else
+        {
+            GeometricWarpResult single = ComputeWarp(
+                reference.depthMeters,currentDepthMeters,
+                reference.Tcw,TcwCurrent,K);
+            ClassifyEvidence(single,residualThresholdMeters);
+            perReference.warp = single.stats;
 
-            for(int u=0; u<currentDepthMeters.cols; ++u)
+            for(int v=0; v<currentDepthMeters.rows; ++v)
             {
-                if(validRow[u]==0)
-                    continue;
+                const unsigned char *validRow =
+                    single.validComparisonMask.ptr<unsigned char>(v);
+                const unsigned char *positiveRow =
+                    single.positiveSeedMask.ptr<unsigned char>(v);
+                const unsigned char *negativeRow =
+                    single.negativeDiagnosticMask.ptr<unsigned char>(v);
+                const unsigned char *consistentRow =
+                    single.consistentEvidenceMask.ptr<unsigned char>(v);
+                unsigned char *comparisonCountRow =
+                    result.comparisonCount.ptr<unsigned char>(v);
+                unsigned char *positiveCountRow =
+                    result.positiveCount.ptr<unsigned char>(v);
+                unsigned char *negativeCountRow =
+                    result.negativeCount.ptr<unsigned char>(v);
+                unsigned char *consistentCountRow =
+                    result.consistentCount.ptr<unsigned char>(v);
 
-                ++comparisonCountRow[u];
-                if(positiveRow[u]!=0)
-                    ++positiveCountRow[u];
-                else if(negativeRow[u]!=0)
-                    ++negativeCountRow[u];
-                else if(consistentRow[u]!=0)
-                    ++consistentCountRow[u];
-                else
-                    throw std::logic_error(
-                        "valid comparison is missing a geometric evidence class");
+                for(int u=0; u<currentDepthMeters.cols; ++u)
+                {
+                    if(validRow[u]==0)
+                        continue;
+
+                    ++comparisonCountRow[u];
+                    if(positiveRow[u]!=0)
+                        ++positiveCountRow[u];
+                    else if(negativeRow[u]!=0)
+                        ++negativeCountRow[u];
+                    else if(consistentRow[u]!=0)
+                        ++consistentCountRow[u];
+                    else
+                        throw std::logic_error(
+                            "valid comparison is missing a geometric evidence class");
+                }
             }
         }
+        warpAndEvidenceMs += perReference.warp.totalMs;
+        result.perReference.push_back(perReference);
     }
 
     const std::chrono::steady_clock::time_point aggregateEnd =
@@ -843,6 +1124,174 @@ GeometricDynamicDetector::SelectCachedReferences(
             result.references.push_back(*matchedReference);
     }
     result.stats.selectedReferenceCount = result.references.size();
+    return result;
+}
+
+GeometricRegionPartitionResult
+GeometricDynamicDetector::PartitionDepthByDiscontinuity(
+    const cv::Mat &depthMeters,
+    const float relativeThreshold,
+    const float absoluteThresholdMeters,
+    const std::size_t smallRegionMaximumPixels)
+{
+    ValidateDepth(depthMeters,"region-partition depth");
+    if(!std::isfinite(relativeThreshold) ||
+       relativeThreshold<0.0f)
+    {
+        throw std::invalid_argument(
+            "region relative threshold must be finite and non-negative");
+    }
+    if(!std::isfinite(absoluteThresholdMeters) ||
+       absoluteThresholdMeters<=0.0f)
+    {
+        throw std::invalid_argument(
+            "region absolute threshold must be finite and positive");
+    }
+
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+    GeometricRegionPartitionResult result;
+    result.boundaryMask = cv::Mat::zeros(
+        depthMeters.size(),CV_8UC1);
+    result.labels = cv::Mat(
+        depthMeters.size(),CV_32SC1,cv::Scalar(-1));
+
+    static const int du[4] = {-1,1,0,0};
+    static const int dv[4] = {0,0,-1,1};
+    for(int v=0; v<depthMeters.rows; ++v)
+    {
+        const float *depthRow = depthMeters.ptr<float>(v);
+        unsigned char *boundaryRow =
+            result.boundaryMask.ptr<unsigned char>(v);
+        for(int u=0; u<depthMeters.cols; ++u)
+        {
+            const float centerDepth = depthRow[u];
+            if(!IsValidDepth(centerDepth))
+                continue;
+            ++result.stats.validDepthPixels;
+
+            const float discontinuityThreshold =
+                std::max(relativeThreshold*centerDepth,
+                         absoluteThresholdMeters);
+            for(int direction=0; direction<4; ++direction)
+            {
+                const int neighborU = u+du[direction];
+                const int neighborV = v+dv[direction];
+                if(neighborU<0 || neighborU>=depthMeters.cols ||
+                   neighborV<0 || neighborV>=depthMeters.rows)
+                {
+                    continue;
+                }
+                const float neighborDepth =
+                    depthMeters.at<float>(neighborV,neighborU);
+                if(IsValidDepth(neighborDepth) &&
+                   std::abs(neighborDepth-centerDepth)>
+                       discontinuityThreshold)
+                {
+                    boundaryRow[u] = 255;
+                    ++result.stats.boundaryPixels;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::deque<cv::Point2i> frontier;
+    int nextLabel = 0;
+    for(int v=0; v<depthMeters.rows; ++v)
+    {
+        int *labelRow = result.labels.ptr<int>(v);
+        const float *depthRow = depthMeters.ptr<float>(v);
+        const unsigned char *boundaryRow =
+            result.boundaryMask.ptr<unsigned char>(v);
+        for(int u=0; u<depthMeters.cols; ++u)
+        {
+            if(!IsValidDepth(depthRow[u]))
+                continue;
+            if(boundaryRow[u]!=0)
+            {
+                labelRow[u] = -2;
+                continue;
+            }
+            if(labelRow[u]>=0)
+                continue;
+
+            std::size_t regionPixels = 0;
+            labelRow[u] = nextLabel;
+            frontier.push_back(cv::Point2i(u,v));
+            while(!frontier.empty())
+            {
+                const cv::Point2i pixel = frontier.front();
+                frontier.pop_front();
+                ++regionPixels;
+
+                for(int direction=0; direction<4; ++direction)
+                {
+                    const int neighborU = pixel.x+du[direction];
+                    const int neighborV = pixel.y+dv[direction];
+                    if(neighborU<0 ||
+                       neighborU>=depthMeters.cols ||
+                       neighborV<0 ||
+                       neighborV>=depthMeters.rows)
+                    {
+                        continue;
+                    }
+                    if(result.labels.at<int>(
+                           neighborV,neighborU)!=-1 ||
+                       result.boundaryMask.at<unsigned char>(
+                           neighborV,neighborU)!=0 ||
+                       !IsValidDepth(depthMeters.at<float>(
+                           neighborV,neighborU)))
+                    {
+                        continue;
+                    }
+                    result.labels.at<int>(
+                        neighborV,neighborU) = nextLabel;
+                    frontier.push_back(
+                        cv::Point2i(neighborU,neighborV));
+                }
+            }
+
+            result.regionSizes.push_back(regionPixels);
+            result.stats.assignedRegionPixels += regionPixels;
+            if(regionPixels==1)
+                ++result.stats.singletonRegionCount;
+            if(regionPixels<=smallRegionMaximumPixels)
+                ++result.stats.smallRegionCount;
+            ++nextLabel;
+        }
+    }
+
+    result.stats.regionCount = result.regionSizes.size();
+    std::vector<std::size_t> sortedSizes = result.regionSizes;
+    std::sort(sortedSizes.begin(),sortedSizes.end(),
+              std::greater<std::size_t>());
+    if(!sortedSizes.empty())
+        result.stats.largestRegionPixels = sortedSizes.front();
+    const std::size_t topCount =
+        std::min<std::size_t>(5,sortedSizes.size());
+    for(std::size_t index=0; index<topCount; ++index)
+        result.stats.topFiveRegionPixels += sortedSizes[index];
+
+    if(result.stats.validDepthPixels>0)
+    {
+        const double valid =
+            static_cast<double>(result.stats.validDepthPixels);
+        result.stats.boundaryValidRatio =
+            static_cast<double>(result.stats.boundaryPixels)/valid;
+        result.stats.assignedValidRatio =
+            static_cast<double>(
+                result.stats.assignedRegionPixels)/valid;
+        result.stats.largestRegionValidRatio =
+            static_cast<double>(
+                result.stats.largestRegionPixels)/valid;
+        result.stats.topFiveRegionValidRatio =
+            static_cast<double>(
+                result.stats.topFiveRegionPixels)/valid;
+    }
+    result.stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-totalStart).count();
     return result;
 }
 

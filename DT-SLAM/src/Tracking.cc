@@ -40,6 +40,7 @@
 #include"PnPsolver.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -281,7 +282,9 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mState(NO_IMAGES_YET), mSensor(sensor), mbOnlyTracking(false), mbVO(false), mpORBVocabulary(pVoc),
     mpKeyFrameDB(pKFDB), mpInitializer(static_cast<Initializer*>(NULL)), mpSystem(pSys), mpViewer(NULL),
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpMap(pMap),
-    mbGeometryShadowEnabled(false), mbGeometryDebugSaveEnabled(false),
+    mbGeometryShadowEnabled(false),
+    mbGeometrySingleReferenceShadowEnabled(true),
+    mbGeometryDebugSaveEnabled(false),
     mbGeometryUsesDedicatedCameraModel(false),
     mnGeometryLogEveryN(30), mnGeometryDebugEveryN(30),
     mnGeometryComputedFrames(0),
@@ -289,6 +292,9 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mnGeometryMultiReferenceMaxReferences(5),
     mnGeometryMultiReferenceHistorySize(20),
     mGeometryMultiReferenceSelectionPolicy("recent"),
+    mGeometryMultiReferenceSamplingPolicy("dense"),
+    mnGeometryMultiReferenceGridStride(4),
+    mbGeometryMultiReferenceDenseAuditEnabled(false),
     mnGeometryMultiReferenceComputedFrames(0),
     mbJiGeometryShadowEnabled(false),
     mbJiGeometryReprojectionStatsEnabled(false),
@@ -398,6 +404,14 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     const cv::FileNode geometryEnableNode = fSettings["Geometry.Enable"];
     if(!geometryEnableNode.empty())
         mbGeometryShadowEnabled = static_cast<int>(geometryEnableNode)!=0;
+
+    const cv::FileNode geometrySingleReferenceEnableNode =
+        fSettings["Geometry.SingleReferenceShadowEnable"];
+    if(!geometrySingleReferenceEnableNode.empty())
+    {
+        mbGeometrySingleReferenceShadowEnabled =
+            static_cast<int>(geometrySingleReferenceEnableNode)!=0;
+    }
 
     const cv::FileNode geometryMultiReferenceEnableNode =
         fSettings["Geometry.MultiReferenceShadowEnable"];
@@ -514,6 +528,55 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         throw std::invalid_argument(
             "Geometry.MultiReferenceSelectionPolicy must be "
             "'recent' or 'covisibility'");
+    }
+    const cv::FileNode geometryMultiReferenceSamplingNode =
+        fSettings["Geometry.MultiReferenceSamplingPolicy"];
+    if(!geometryMultiReferenceSamplingNode.empty())
+    {
+        geometryMultiReferenceSamplingNode >>
+            mGeometryMultiReferenceSamplingPolicy;
+    }
+    if(mGeometryMultiReferenceSamplingPolicy!="dense" &&
+       mGeometryMultiReferenceSamplingPolicy!="orb_depth" &&
+       mGeometryMultiReferenceSamplingPolicy!="grid_depth")
+    {
+        throw std::invalid_argument(
+            "Geometry.MultiReferenceSamplingPolicy must be "
+            "'dense', 'orb_depth', or 'grid_depth'");
+    }
+    const cv::FileNode geometryMultiReferenceGridStrideNode =
+        fSettings["Geometry.MultiReferenceGridStride"];
+    if(!geometryMultiReferenceGridStrideNode.empty())
+    {
+        mnGeometryMultiReferenceGridStride =
+            static_cast<int>(geometryMultiReferenceGridStrideNode);
+    }
+    const char *gridStrideOverride =
+        std::getenv("DT_SLAM_GEOMETRY_GRID_STRIDE");
+    if(gridStrideOverride && gridStrideOverride[0]!='\0')
+    {
+        mnGeometryMultiReferenceGridStride =
+            std::atoi(gridStrideOverride);
+    }
+    if(mnGeometryMultiReferenceGridStride<1 ||
+       mnGeometryMultiReferenceGridStride>64)
+    {
+        throw std::invalid_argument(
+            "Geometry.MultiReferenceGridStride must be in [1,64]");
+    }
+    const char *denseSamplingAudit =
+        std::getenv("DT_SLAM_GEOMETRY_DENSE_SAMPLING_AUDIT");
+    if(denseSamplingAudit && denseSamplingAudit[0]!='\0' &&
+       std::string(denseSamplingAudit)!="0")
+    {
+        mbGeometryMultiReferenceDenseAuditEnabled = true;
+    }
+    if(mbGeometryMultiReferenceDenseAuditEnabled &&
+       mGeometryMultiReferenceSamplingPolicy=="dense")
+    {
+        throw std::invalid_argument(
+            "DT_SLAM_GEOMETRY_DENSE_SAMPLING_AUDIT requires "
+            "a non-dense Geometry.MultiReferenceSamplingPolicy");
     }
     if(mnGeometryMultiReferenceMaxReferences<1 ||
        mnGeometryMultiReferenceMaxReferences>255)
@@ -709,6 +772,9 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
          << (mbGeometryShadowEnabled ? "enabled" : "disabled") << endl;
     if(mbGeometryShadowEnabled)
     {
+        cout << "- G0 single-reference shadow: "
+             << (mbGeometrySingleReferenceShadowEnabled ?
+                 "enabled" : "disabled") << endl;
         cout << "- pixel domain: raw registered RGB/depth pixels" << endl;
         cout << "- camera model: "
              << (mbGeometryUsesDedicatedCameraModel ?
@@ -758,6 +824,17 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         {
             cout << "- G2 reference policy: "
                  << mGeometryMultiReferenceSelectionPolicy << endl;
+            cout << "- G2 reference depth sampling: "
+                 << mGeometryMultiReferenceSamplingPolicy << endl;
+            if(mGeometryMultiReferenceSamplingPolicy=="grid_depth")
+            {
+                cout << "- G2 regular-grid stride: "
+                     << mnGeometryMultiReferenceGridStride
+                     << " pixels" << endl;
+            }
+            cout << "- G2 sampling same-reference dense audit: "
+                 << (mbGeometryMultiReferenceDenseAuditEnabled
+                         ? "enabled" : "disabled") << endl;
             cout << "- G2 requested references: "
                  << mnGeometryMultiReferenceMaxReferences
                  << " from cached history "
@@ -1039,7 +1116,8 @@ void Tracking::SaveGeometryPoseDiagnostics()
         }
         else
         {
-            stream << "frame,timestamp,reference_count,comparison_count,"
+            stream << "frame,timestamp,sampling_policy,reference_count,"
+                   << "comparison_count,"
                    << "positive_count,pixel_count,semantic_pixel_count,"
                    << "pixels_with_comparison,total_comparisons,"
                    << "pixels_with_positive,total_positive_votes,"
@@ -1055,6 +1133,7 @@ void Tracking::SaveGeometryPoseDiagnostics()
                     record.frameStats;
                 stream << record.frameId << ","
                        << record.timestamp << ","
+                       << record.samplingPolicy << ","
                        << record.referenceCount << ","
                        << record.comparisonCount << ","
                        << record.positiveCount << ","
@@ -1089,15 +1168,25 @@ void Tracking::SaveGeometryPoseDiagnostics()
         }
         else
         {
-            stream << "frame,timestamp,policy,requested_reference_count,"
+            stream << "frame,timestamp,policy,sampling_policy,"
+                   << "requested_reference_count,"
                    << "candidate_count,cached_reference_match_count,"
                    << "selected_reference_count,evidence_computed,"
                    << "selected_frame_ids,selected_covisibility_weights,"
-                   << "selected_frame_ages,per_reference_projected_samples,"
+                   << "selected_frame_ages,"
+                   << "per_reference_valid_reference_samples,"
+                   << "per_reference_projected_samples,"
                    << "per_reference_valid_comparisons,"
                    << "per_reference_prediction_coverage,"
                    << "per_reference_comparison_coverage,"
-                   << "per_reference_total_ms\n";
+                   << "per_reference_total_ms,dense_audit_computed,"
+                   << "sampled_comparison_pixels,"
+                   << "dense_comparison_on_sampled_pixels,"
+                   << "sampled_positive_presence_pixels,"
+                   << "dense_positive_on_sampled_pixels,"
+                   << "both_positive_pixels,"
+                   << "positive_presence_agreement_pixels,"
+                   << "exact_vote_agreement_pixels\n";
             stream << std::setprecision(15);
             for(std::size_t index=0;
                 index<mvGeometryReferenceSelectionDiagnostics.size();
@@ -1106,6 +1195,7 @@ void Tracking::SaveGeometryPoseDiagnostics()
                 const GeometryReferenceSelectionRecord &record =
                     mvGeometryReferenceSelectionDiagnostics[index];
                 std::vector<std::size_t> projectedSamples;
+                std::vector<std::size_t> validReferenceSamples;
                 std::vector<std::size_t> validComparisons;
                 std::vector<double> predictionCoverage;
                 std::vector<double> comparisonCoverage;
@@ -1116,6 +1206,8 @@ void Tracking::SaveGeometryPoseDiagnostics()
                 {
                     const GeometricWarpStats &stats =
                         record.perReference[referenceIndex].warp;
+                    validReferenceSamples.push_back(
+                        stats.referenceValidPixels);
                     projectedSamples.push_back(stats.projectedSamples);
                     validComparisons.push_back(stats.validComparisons);
                     predictionCoverage.push_back(
@@ -1127,6 +1219,7 @@ void Tracking::SaveGeometryPoseDiagnostics()
                 stream << record.frameId << ","
                        << record.timestamp << ","
                        << record.policy << ","
+                       << record.samplingPolicy << ","
                        << record.requestedReferenceCount << ","
                        << record.stats.candidateCount << ","
                        << record.stats.cachedReferenceMatchCount << ","
@@ -1138,11 +1231,21 @@ void Tracking::SaveGeometryPoseDiagnostics()
                               record.selectedCovisibilityWeights) << ","
                        << JoinDiagnosticValues(
                               record.selectedFrameAges) << ","
+                       << JoinDiagnosticValues(
+                              validReferenceSamples) << ","
                        << JoinDiagnosticValues(projectedSamples) << ","
                        << JoinDiagnosticValues(validComparisons) << ","
                        << JoinDiagnosticValues(predictionCoverage) << ","
                        << JoinDiagnosticValues(comparisonCoverage) << ","
-                       << JoinDiagnosticValues(totalMs) << "\n";
+                       << JoinDiagnosticValues(totalMs) << ","
+                       << (record.denseAuditComputed ? 1 : 0) << ","
+                       << record.sampledComparisonPixels << ","
+                       << record.denseComparisonOnSampledPixels << ","
+                       << record.sampledPositivePresencePixels << ","
+                       << record.densePositiveOnSampledPixels << ","
+                       << record.bothPositivePixels << ","
+                       << record.positivePresenceAgreementPixels << ","
+                       << record.exactVoteAgreementPixels << "\n";
             }
             stream.close();
             cout << "[Geometry G2-2R] saved "
@@ -1394,29 +1497,38 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
     {
         if(mState==OK && !mCurrentFrame.mTcw.empty())
         {
-            cv::Mat referenceDepth = imDepth.clone();
-            if(!semanticMask.empty())
-                referenceDepth.setTo(0.0f,semanticMask);
-            mGeometricDetector.UpdateReference(
-                referenceDepth,mCurrentFrame.mTcw,mCurrentFrame.mnId,
-                mCurrentFrame.mTimeStamp);
-            if(mbGeometryMultiReferenceShadowEnabled &&
-               mnLastKeyFrameId==mCurrentFrame.mnId)
+            const bool updateMultiReference =
+                mbGeometryMultiReferenceShadowEnabled &&
+                mnLastKeyFrameId==mCurrentFrame.mnId;
+            cv::Mat referenceDepth;
+            if(mbGeometrySingleReferenceShadowEnabled ||
+               updateMultiReference)
             {
-                UpdateMultiReferenceGeometryHistory(referenceDepth);
+                referenceDepth = imDepth.clone();
+                if(!semanticMask.empty())
+                    referenceDepth.setTo(0.0f,semanticMask);
+                if(mbGeometrySingleReferenceShadowEnabled)
+                {
+                    mGeometricDetector.UpdateReference(
+                        referenceDepth,mCurrentFrame.mTcw,
+                        mCurrentFrame.mnId,mCurrentFrame.mTimeStamp);
+                }
+                if(updateMultiReference)
+                    UpdateMultiReferenceGeometryHistory(referenceDepth);
             }
-            if(!mCurrentGroundTruthTcw.empty())
+            if(mbGeometrySingleReferenceShadowEnabled &&
+               !mCurrentGroundTruthTcw.empty())
             {
                 mGeometricGroundTruthDetector.UpdateReference(
                     referenceDepth,mCurrentGroundTruthTcw,mCurrentFrame.mnId,
                     mCurrentFrame.mTimeStamp);
             }
-            else
+            else if(mbGeometrySingleReferenceShadowEnabled)
             {
                 mGeometricGroundTruthDetector.ResetReference();
             }
         }
-        else
+        else if(mbGeometrySingleReferenceShadowEnabled)
         {
             mGeometricDetector.ResetReference();
             mGeometricGroundTruthDetector.ResetReference();
@@ -1466,11 +1578,19 @@ int Tracking::RemoveDynamicAssociations(Frame &frame)
 void Tracking::RunGeometryShadow()
 {
     if(!mbGeometryShadowEnabled || mSensor!=System::RGBD ||
-       mCurrentDepthMeters.empty() || mCurrentFrame.mTcw.empty() ||
-       !mGeometricDetector.HasReference())
+       mCurrentDepthMeters.empty() || mCurrentFrame.mTcw.empty())
     {
         return;
     }
+
+    if(!mbGeometrySingleReferenceShadowEnabled)
+    {
+        RunMultiReferenceGeometryShadow();
+        return;
+    }
+
+    if(!mGeometricDetector.HasReference())
+        return;
 
     GeometricWarpResult result;
     if(!mGeometricDetector.Compute(
@@ -1735,6 +1855,16 @@ void Tracking::RunMultiReferenceGeometryShadow()
         return;
     }
 
+    std::string samplingPolicyLabel =
+        mGeometryMultiReferenceSamplingPolicy;
+    if(mGeometryMultiReferenceSamplingPolicy=="grid_depth")
+    {
+        std::ostringstream label;
+        label << "grid_depth_s"
+              << mnGeometryMultiReferenceGridStride;
+        samplingPolicyLabel = label.str();
+    }
+
     std::vector<GeometricReferenceFrame> cachedReferences(
         mqGeometryKeyframeReferences.begin(),
         mqGeometryKeyframeReferences.end());
@@ -1813,10 +1943,20 @@ void Tracking::RunMultiReferenceGeometryShadow()
     selectionRecord.timestamp = mCurrentFrame.mTimeStamp;
     selectionRecord.policy =
         mGeometryMultiReferenceSelectionPolicy;
+    selectionRecord.samplingPolicy =
+        samplingPolicyLabel;
     selectionRecord.requestedReferenceCount =
         mnGeometryMultiReferenceMaxReferences;
     selectionRecord.stats = selection.stats;
     selectionRecord.evidenceComputed = false;
+    selectionRecord.denseAuditComputed = false;
+    selectionRecord.sampledComparisonPixels = 0;
+    selectionRecord.denseComparisonOnSampledPixels = 0;
+    selectionRecord.sampledPositivePresencePixels = 0;
+    selectionRecord.densePositiveOnSampledPixels = 0;
+    selectionRecord.bothPositivePixels = 0;
+    selectionRecord.positivePresenceAgreementPixels = 0;
+    selectionRecord.exactVoteAgreementPixels = 0;
     for(std::size_t referenceIndex=0;
         referenceIndex<references.size(); ++referenceIndex)
     {
@@ -1866,6 +2006,8 @@ void Tracking::RunMultiReferenceGeometryShadow()
                  << mCurrentFrame.mnId
                  << " policy="
                  << mGeometryMultiReferenceSelectionPolicy
+                 << " sampling="
+                 << samplingPolicyLabel
                  << " requested="
                  << mnGeometryMultiReferenceMaxReferences
                  << " candidates="
@@ -1888,7 +2030,12 @@ void Tracking::RunMultiReferenceGeometryShadow()
             GeometricDynamicDetector::ComputeMultiReferenceEvidence(
                 references,mCurrentDepthMeters,mCurrentFrame.mTcw,
                 mGeometryK,
-                mGeometricDetector.ResidualThresholdMeters());
+                mGeometricDetector.ResidualThresholdMeters(),
+                mGeometryMultiReferenceSamplingPolicy=="orb_depth"
+                    ? GeometricReferenceSamplingPolicy::OrbDepth
+                    : (mGeometryMultiReferenceSamplingPolicy=="grid_depth"
+                        ? GeometricReferenceSamplingPolicy::GridDepth
+                        : GeometricReferenceSamplingPolicy::Dense));
     }
     catch(const std::exception &error)
     {
@@ -1902,9 +2049,72 @@ void Tracking::RunMultiReferenceGeometryShadow()
 
     selectionRecord.evidenceComputed = true;
     selectionRecord.perReference = result.perReference;
+    ++mnGeometryMultiReferenceComputedFrames;
+
+    GeometricMultiReferenceResult denseAuditResult;
+    bool hasDenseAuditResult = false;
+    if(mbGeometryMultiReferenceDenseAuditEnabled)
+    {
+        try
+        {
+            denseAuditResult =
+                GeometricDynamicDetector::ComputeMultiReferenceEvidence(
+                    references,mCurrentDepthMeters,mCurrentFrame.mTcw,
+                    mGeometryK,
+                    mGeometricDetector.ResidualThresholdMeters(),
+                    GeometricReferenceSamplingPolicy::Dense);
+            hasDenseAuditResult = true;
+        }
+        catch(const std::exception &error)
+        {
+            cerr << "[Geometry G2-2] frame="
+                 << mCurrentFrame.mnId
+                 << " same-reference dense audit failed: "
+                 << error.what() << endl;
+        }
+    }
+    if(hasDenseAuditResult)
+    {
+        selectionRecord.denseAuditComputed = true;
+        for(int v=0; v<result.comparisonCount.rows; ++v)
+        {
+            const unsigned char *sampledComparison =
+                result.comparisonCount.ptr<unsigned char>(v);
+            const unsigned char *sampledPositive =
+                result.positiveCount.ptr<unsigned char>(v);
+            const unsigned char *denseComparison =
+                denseAuditResult.comparisonCount.ptr<unsigned char>(v);
+            const unsigned char *densePositive =
+                denseAuditResult.positiveCount.ptr<unsigned char>(v);
+            for(int u=0; u<result.comparisonCount.cols; ++u)
+            {
+                if(sampledComparison[u]==0)
+                    continue;
+                ++selectionRecord.sampledComparisonPixels;
+                if(denseComparison[u]>0)
+                {
+                    ++selectionRecord.denseComparisonOnSampledPixels;
+                }
+                if(sampledPositive[u]>0)
+                    ++selectionRecord.sampledPositivePresencePixels;
+                if(densePositive[u]>0)
+                    ++selectionRecord.densePositiveOnSampledPixels;
+                if(sampledPositive[u]>0 && densePositive[u]>0)
+                    ++selectionRecord.bothPositivePixels;
+                if((sampledPositive[u]>0)==(densePositive[u]>0))
+                {
+                    ++selectionRecord.positivePresenceAgreementPixels;
+                }
+                if(sampledComparison[u]==denseComparison[u] &&
+                   sampledPositive[u]==densePositive[u])
+                {
+                    ++selectionRecord.exactVoteAgreementPixels;
+                }
+            }
+        }
+    }
     mvGeometryReferenceSelectionDiagnostics.push_back(
         selectionRecord);
-    ++mnGeometryMultiReferenceComputedFrames;
 
     if(!mGeometryMultiReferenceDebugOutputDir.empty())
     {
@@ -1928,83 +2138,96 @@ void Tracking::RunMultiReferenceGeometryShadow()
 
     const int referenceCount =
         static_cast<int>(references.size());
-    std::vector<std::vector<std::size_t> > histogram(
-        static_cast<std::size_t>(referenceCount+1),
-        std::vector<std::size_t>(
-            static_cast<std::size_t>(referenceCount+1),0));
-    std::vector<std::vector<std::size_t> > semanticHistogram(
-        static_cast<std::size_t>(referenceCount+1),
-        std::vector<std::size_t>(
-            static_cast<std::size_t>(referenceCount+1),0));
-
-    const bool hasSemanticProxy =
-        !mCurrentFrame.mSemanticMask.empty() &&
-        mCurrentFrame.mSemanticMask.type()==CV_8UC1 &&
-        mCurrentFrame.mSemanticMask.size()==
-            result.comparisonCount.size();
-    for(int v=0; v<result.comparisonCount.rows; ++v)
-    {
-        const unsigned char *comparisonRow =
-            result.comparisonCount.ptr<unsigned char>(v);
-        const unsigned char *positiveRow =
-            result.positiveCount.ptr<unsigned char>(v);
-        const unsigned char *semanticRow =
-            hasSemanticProxy
-                ? mCurrentFrame.mSemanticMask.ptr<unsigned char>(v)
-                : static_cast<const unsigned char*>(NULL);
-        for(int u=0; u<result.comparisonCount.cols; ++u)
+    const auto appendHistogram =
+        [&](const GeometricMultiReferenceResult &evidence,
+            const std::string &samplingPolicy)
         {
-            const int comparisons = comparisonRow[u];
-            const int positives = positiveRow[u];
-            if(comparisons<0 || comparisons>referenceCount ||
-               positives<0 || positives>comparisons)
-            {
-                throw std::logic_error(
-                    "G2-1 histogram received invalid evidence counts");
-            }
-            ++histogram[static_cast<std::size_t>(comparisons)]
-                       [static_cast<std::size_t>(positives)];
-            if(semanticRow && semanticRow[u]!=0)
-            {
-                ++semanticHistogram[
-                    static_cast<std::size_t>(comparisons)]
-                    [static_cast<std::size_t>(positives)];
-            }
-        }
-    }
+            if(mGeometryMultiReferenceCsvPath.empty())
+                return;
 
-    if(!mGeometryMultiReferenceCsvPath.empty())
-    {
-        for(int comparisons=0;
-            comparisons<=referenceCount; ++comparisons)
-        {
-            for(int positives=0;
-                positives<=comparisons; ++positives)
+            std::vector<std::vector<std::size_t> > histogram(
+                static_cast<std::size_t>(referenceCount+1),
+                std::vector<std::size_t>(
+                    static_cast<std::size_t>(referenceCount+1),0));
+            std::vector<std::vector<std::size_t> > semanticHistogram(
+                static_cast<std::size_t>(referenceCount+1),
+                std::vector<std::size_t>(
+                    static_cast<std::size_t>(referenceCount+1),0));
+
+            const bool hasSemanticProxy =
+                !mCurrentFrame.mSemanticMask.empty() &&
+                mCurrentFrame.mSemanticMask.type()==CV_8UC1 &&
+                mCurrentFrame.mSemanticMask.size()==
+                    evidence.comparisonCount.size();
+            for(int v=0; v<evidence.comparisonCount.rows; ++v)
             {
-                const std::size_t pixelCount =
-                    histogram[
+                const unsigned char *comparisonRow =
+                    evidence.comparisonCount.ptr<unsigned char>(v);
+                const unsigned char *positiveRow =
+                    evidence.positiveCount.ptr<unsigned char>(v);
+                const unsigned char *semanticRow =
+                    hasSemanticProxy
+                        ? mCurrentFrame.mSemanticMask.ptr<unsigned char>(v)
+                        : static_cast<const unsigned char*>(NULL);
+                for(int u=0; u<evidence.comparisonCount.cols; ++u)
+                {
+                    const int comparisons = comparisonRow[u];
+                    const int positives = positiveRow[u];
+                    if(comparisons<0 ||
+                       comparisons>referenceCount ||
+                       positives<0 ||
+                       positives>comparisons)
+                    {
+                        throw std::logic_error(
+                            "G2 histogram received invalid evidence counts");
+                    }
+                    ++histogram[
                         static_cast<std::size_t>(comparisons)]
                         [static_cast<std::size_t>(positives)];
-                const std::size_t semanticPixelCount =
-                    semanticHistogram[
-                        static_cast<std::size_t>(comparisons)]
-                        [static_cast<std::size_t>(positives)];
-                if(pixelCount==0 && semanticPixelCount==0)
-                    continue;
-
-                GeometryMultiReferenceHistogramRecord record;
-                record.frameId = mCurrentFrame.mnId;
-                record.timestamp = mCurrentFrame.mTimeStamp;
-                record.referenceCount = referenceCount;
-                record.comparisonCount = comparisons;
-                record.positiveCount = positives;
-                record.pixelCount = pixelCount;
-                record.semanticPixelCount = semanticPixelCount;
-                record.frameStats = result.stats;
-                mvGeometryMultiReferenceHistogram.push_back(record);
+                    if(semanticRow && semanticRow[u]!=0)
+                    {
+                        ++semanticHistogram[
+                            static_cast<std::size_t>(comparisons)]
+                            [static_cast<std::size_t>(positives)];
+                    }
+                }
             }
-        }
-    }
+
+            for(int comparisons=0;
+                comparisons<=referenceCount; ++comparisons)
+            {
+                for(int positives=0;
+                    positives<=comparisons; ++positives)
+                {
+                    const std::size_t pixelCount =
+                        histogram[
+                            static_cast<std::size_t>(comparisons)]
+                            [static_cast<std::size_t>(positives)];
+                    const std::size_t semanticPixelCount =
+                        semanticHistogram[
+                            static_cast<std::size_t>(comparisons)]
+                            [static_cast<std::size_t>(positives)];
+                    if(pixelCount==0 && semanticPixelCount==0)
+                        continue;
+
+                    GeometryMultiReferenceHistogramRecord record;
+                    record.frameId = mCurrentFrame.mnId;
+                    record.timestamp = mCurrentFrame.mTimeStamp;
+                    record.samplingPolicy = samplingPolicy;
+                    record.referenceCount = referenceCount;
+                    record.comparisonCount = comparisons;
+                    record.positiveCount = positives;
+                    record.pixelCount = pixelCount;
+                    record.semanticPixelCount = semanticPixelCount;
+                    record.frameStats = evidence.stats;
+                    mvGeometryMultiReferenceHistogram.push_back(
+                        record);
+                }
+            }
+        };
+    appendHistogram(result,samplingPolicyLabel);
+    if(hasDenseAuditResult)
+        appendHistogram(denseAuditResult,"dense_same_reference_audit");
 
     if(mnGeometryMultiReferenceComputedFrames==1 ||
        mnGeometryMultiReferenceComputedFrames%
@@ -2014,6 +2237,8 @@ void Tracking::RunMultiReferenceGeometryShadow()
         cout << "[Geometry G2-1] frame=" << mCurrentFrame.mnId
              << " policy="
              << mGeometryMultiReferenceSelectionPolicy
+             << " sampling="
+             << samplingPolicyLabel
              << " references=" << referenceCount
              << " selected_ids="
              << JoinDiagnosticValues(
@@ -2042,6 +2267,9 @@ void Tracking::RunMultiReferenceGeometryShadow()
              << result.stats.aggregateMs
              << " total_ms="
              << result.stats.totalMs
+             << " same_reference_dense_audit_ms="
+             << (hasDenseAuditResult
+                     ? denseAuditResult.stats.totalMs : -1.0)
              << " dynamic_decision=none"
              << " direct_slam_state_mutation=none"
              << endl;
@@ -2071,6 +2299,55 @@ void Tracking::UpdateMultiReferenceGeometryHistory(
     reference.Tcw = mCurrentFrame.mTcw.clone();
     reference.frameId = mCurrentFrame.mnId;
     reference.timestampSeconds = mCurrentFrame.mTimeStamp;
+    if(mGeometryMultiReferenceSamplingPolicy=="orb_depth")
+    {
+        cv::Mat sampledPixels =
+            cv::Mat::zeros(referenceDepth.size(),CV_8UC1);
+        reference.featureDepthPixels.reserve(
+            mCurrentFrame.mvKeys.size());
+        for(std::size_t featureIndex=0;
+            featureIndex<mCurrentFrame.mvKeys.size(); ++featureIndex)
+        {
+            const int u = static_cast<int>(
+                mCurrentFrame.mvKeys[featureIndex].pt.x);
+            const int v = static_cast<int>(
+                mCurrentFrame.mvKeys[featureIndex].pt.y);
+            if(u<0 || u>=referenceDepth.cols ||
+               v<0 || v>=referenceDepth.rows ||
+               sampledPixels.at<unsigned char>(v,u)!=0)
+            {
+                continue;
+            }
+            sampledPixels.at<unsigned char>(v,u) = 255;
+            const float depth = referenceDepth.at<float>(v,u);
+            if(std::isfinite(depth) && depth>0.0f)
+            {
+                reference.featureDepthPixels.push_back(
+                    cv::Point2i(u,v));
+            }
+        }
+    }
+    else if(mGeometryMultiReferenceSamplingPolicy=="grid_depth")
+    {
+        const int stride = mnGeometryMultiReferenceGridStride;
+        reference.gridDepthPixels.reserve(
+            static_cast<std::size_t>(
+                (referenceDepth.rows+stride-1)/stride)*
+            static_cast<std::size_t>(
+                (referenceDepth.cols+stride-1)/stride));
+        for(int v=0; v<referenceDepth.rows; v+=stride)
+        {
+            for(int u=0; u<referenceDepth.cols; u+=stride)
+            {
+                const float depth = referenceDepth.at<float>(v,u);
+                if(std::isfinite(depth) && depth>0.0f)
+                {
+                    reference.gridDepthPixels.push_back(
+                        cv::Point2i(u,v));
+                }
+            }
+        }
+    }
     mqGeometryKeyframeReferences.push_back(reference);
     while(mqGeometryKeyframeReferences.size()>
           static_cast<std::size_t>(

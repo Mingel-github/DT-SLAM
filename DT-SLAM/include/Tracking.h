@@ -256,6 +256,7 @@ protected:
     GeometricDynamicDetector mGeometricDetector;
     GeometricDynamicDetector mGeometricGroundTruthDetector;
     bool mbGeometryShadowEnabled;
+    bool mbGeometrySingleReferenceShadowEnabled;
     bool mbGeometryDebugSaveEnabled;
     bool mbGeometryUsesDedicatedCameraModel;
     int mnGeometryLogEveryN;
@@ -272,6 +273,9 @@ protected:
     int mnGeometryMultiReferenceMaxReferences;
     int mnGeometryMultiReferenceHistorySize;
     std::string mGeometryMultiReferenceSelectionPolicy;
+    std::string mGeometryMultiReferenceSamplingPolicy;
+    int mnGeometryMultiReferenceGridStride;
+    bool mbGeometryMultiReferenceDenseAuditEnabled;
     std::string mGeometryMultiReferenceCsvPath;
     std::string mGeometryReferenceSelectionCsvPath;
     std::string mGeometryMultiReferenceDebugOutputDir;
@@ -282,6 +286,7 @@ protected:
     {
         long unsigned int frameId;
         double timestamp;
+        std::string samplingPolicy;
         int referenceCount;
         int comparisonCount;
         int positiveCount;
@@ -297,6 +302,7 @@ protected:
         long unsigned int frameId;
         double timestamp;
         std::string policy;
+        std::string samplingPolicy;
         int requestedReferenceCount;
         GeometricReferenceSelectionStats stats;
         bool evidenceComputed;
@@ -304,6 +310,14 @@ protected:
         std::vector<int> selectedCovisibilityWeights;
         std::vector<long int> selectedFrameAges;
         std::vector<GeometricPerReferenceStats> perReference;
+        bool denseAuditComputed;
+        std::size_t sampledComparisonPixels;
+        std::size_t denseComparisonOnSampledPixels;
+        std::size_t sampledPositivePresencePixels;
+        std::size_t densePositiveOnSampledPixels;
+        std::size_t bothPositivePixels;
+        std::size_t positivePresenceAgreementPixels;
+        std::size_t exactVoteAgreementPixels;
     };
     std::vector<GeometryReferenceSelectionRecord>
         mvGeometryReferenceSelectionDiagnostics;

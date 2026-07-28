@@ -22,6 +22,7 @@ results/*.txt
 DT-SLAM/CameraTrajectory*.txt
 DT-SLAM/KeyFrameTrajectory*.txt
 DT-SLAM/Examples/RGB-D/ji_geometry_test
+DT-SLAM/Examples/RGB-D/depth_region_partition_audit
 DT-SLAM/results/**/*.log
 DT-SLAM/results/**/*.txt
 results/**/*.csv

@@ -336,6 +336,8 @@ void TestCachedReferenceSelection()
     cached[0].frameId = 10;
     cached[1].frameId = 20;
     cached[2].frameId = 30;
+    cached[2].featureDepthPixels.push_back(cv::Point2i(3,4));
+    cached[2].gridDepthPixels.push_back(cv::Point2i(2,3));
     const std::vector<long unsigned int> candidates =
         {30,99,20,20,10};
 
@@ -353,6 +355,161 @@ void TestCachedReferenceSelection()
     Require(result.references[0].frameId==30 &&
             result.references[1].frameId==20,
             "selection must preserve the caller's candidate priority");
+    Require(result.references[0].featureDepthPixels.size()==1 &&
+            result.references[0].featureDepthPixels[0]==cv::Point2i(3,4),
+            "selection must preserve cached ORB-depth samples");
+    Require(result.references[0].gridDepthPixels.size()==1 &&
+            result.references[0].gridDepthPixels[0]==cv::Point2i(2,3),
+            "selection must preserve cached grid-depth samples");
+}
+
+void TestOrbDepthSamplingEvidence()
+{
+    const cv::Mat currentDepth(3,4,CV_32FC1,cv::Scalar(2.0f));
+    cv::Mat referenceDepth = currentDepth.clone();
+    referenceDepth.at<float>(1,1) = 3.0f;
+    referenceDepth.at<float>(1,2) = 1.0f;
+
+    cv::Mat K = cv::Mat::eye(3,3,CV_32F);
+    K.at<float>(0,0) = 100.0f;
+    K.at<float>(1,1) = 100.0f;
+    K.at<float>(0,2) = 1.5f;
+    K.at<float>(1,2) = 1.0f;
+
+    ORB_SLAM2::GeometricReferenceFrame reference;
+    reference.depthMeters = referenceDepth;
+    reference.Tcw = IdentityPose();
+    reference.featureDepthPixels.push_back(cv::Point2i(1,1));
+    reference.featureDepthPixels.push_back(cv::Point2i(2,1));
+    std::vector<ORB_SLAM2::GeometricReferenceFrame> references(1,reference);
+
+    const ORB_SLAM2::GeometricMultiReferenceResult result =
+        ORB_SLAM2::GeometricDynamicDetector::ComputeMultiReferenceEvidence(
+            references,currentDepth,IdentityPose(),K,0.5f,
+            ORB_SLAM2::GeometricReferenceSamplingPolicy::OrbDepth);
+
+    Require(result.stats.totalComparisons==2 &&
+            result.stats.pixelsWithComparison==2,
+            "ORB-depth sampling must compare only projected sampled pixels");
+    Require(result.comparisonCount.at<unsigned char>(1,1)==1 &&
+            result.positiveCount.at<unsigned char>(1,1)==1,
+            "sampled nearer current surface must produce positive evidence");
+    Require(result.comparisonCount.at<unsigned char>(1,2)==1 &&
+            result.negativeCount.at<unsigned char>(1,2)==1,
+            "sampled farther current surface must produce negative evidence");
+    Require(result.comparisonCount.at<unsigned char>(0,0)==0,
+            "unsampled reference pixels must remain unknown");
+    Require(result.perReference.size()==1 &&
+            result.perReference[0].warp.referenceValidPixels==2 &&
+            result.perReference[0].warp.validComparisons==2,
+            "ORB-depth per-reference statistics are incorrect");
+}
+
+void TestGridDepthSamplingEvidence()
+{
+    const cv::Mat currentDepth(4,4,CV_32FC1,cv::Scalar(2.0f));
+    cv::Mat referenceDepth = currentDepth.clone();
+    referenceDepth.at<float>(0,0) = 3.0f;
+    referenceDepth.at<float>(2,2) = 1.0f;
+
+    cv::Mat K = cv::Mat::eye(3,3,CV_32F);
+    K.at<float>(0,0) = 100.0f;
+    K.at<float>(1,1) = 100.0f;
+    K.at<float>(0,2) = 1.5f;
+    K.at<float>(1,2) = 1.5f;
+
+    ORB_SLAM2::GeometricReferenceFrame reference;
+    reference.depthMeters = referenceDepth;
+    reference.Tcw = IdentityPose();
+    reference.gridDepthPixels.push_back(cv::Point2i(0,0));
+    reference.gridDepthPixels.push_back(cv::Point2i(2,0));
+    reference.gridDepthPixels.push_back(cv::Point2i(0,2));
+    reference.gridDepthPixels.push_back(cv::Point2i(2,2));
+    std::vector<ORB_SLAM2::GeometricReferenceFrame> references(1,reference);
+
+    const ORB_SLAM2::GeometricMultiReferenceResult result =
+        ORB_SLAM2::GeometricDynamicDetector::ComputeMultiReferenceEvidence(
+            references,currentDepth,IdentityPose(),K,0.5f,
+            ORB_SLAM2::GeometricReferenceSamplingPolicy::GridDepth);
+
+    Require(result.stats.totalComparisons==4 &&
+            result.stats.pixelsWithComparison==4,
+            "grid-depth sampling must compare only cached grid pixels");
+    Require(result.positiveCount.at<unsigned char>(0,0)==1,
+            "grid-depth positive evidence has the wrong sign");
+    Require(result.negativeCount.at<unsigned char>(2,2)==1,
+            "grid-depth negative evidence has the wrong sign");
+    Require(result.consistentCount.at<unsigned char>(0,2)==1 &&
+            result.consistentCount.at<unsigned char>(2,0)==1,
+            "grid-depth consistent evidence is incorrect");
+    Require(result.comparisonCount.at<unsigned char>(1,1)==0,
+            "non-grid pixels must remain unknown");
+}
+
+void TestDepthBoundaryPartitionSplitsStep()
+{
+    cv::Mat depth(5,8,CV_32FC1,cv::Scalar(1.0f));
+    depth.colRange(4,8).setTo(2.0f);
+
+    const ORB_SLAM2::GeometricRegionPartitionResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            PartitionDepthByDiscontinuity(depth,0.025f,0.08f);
+
+    Require(result.stats.validDepthPixels==40,
+            "region partition valid-depth count is incorrect");
+    Require(result.stats.boundaryPixels==10,
+            "depth step must mark both sides of the discontinuity");
+    Require(result.stats.regionCount==2,
+            "depth step must split two non-boundary regions");
+    Require(result.stats.largestRegionPixels==15 &&
+            result.stats.topFiveRegionPixels==30,
+            "depth-step region sizes are incorrect");
+    Require(result.labels.at<int>(2,3)==-2 &&
+            result.labels.at<int>(2,4)==-2,
+            "depth discontinuity pixels must keep the boundary label");
+    Require(result.labels.at<int>(2,1)>=0 &&
+            result.labels.at<int>(2,6)>=0 &&
+            result.labels.at<int>(2,1)!=
+                result.labels.at<int>(2,6),
+            "opposite sides of a depth step must have distinct labels");
+}
+
+void TestDepthBoundaryPartitionPreservesUnknown()
+{
+    cv::Mat depth(3,5,CV_32FC1,cv::Scalar(1.0f));
+    depth.col(2).setTo(0.0f);
+
+    const ORB_SLAM2::GeometricRegionPartitionResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            PartitionDepthByDiscontinuity(depth,0.025f,0.08f);
+
+    Require(result.stats.validDepthPixels==12 &&
+            result.stats.boundaryPixels==0,
+            "invalid-depth barrier statistics are incorrect");
+    Require(result.stats.regionCount==2,
+            "invalid depth must separate connected regions");
+    Require(result.labels.at<int>(1,2)==-1,
+            "invalid depth must remain unknown rather than static");
+    Require(result.labels.at<int>(1,0)>=0 &&
+            result.labels.at<int>(1,4)>=0 &&
+            result.labels.at<int>(1,0)!=
+                result.labels.at<int>(1,4),
+            "invalid-depth barrier must split region labels");
+}
+
+void TestDepthBoundaryPartitionKeepsPlane()
+{
+    const cv::Mat depth(4,6,CV_32FC1,cv::Scalar(2.0f));
+    const ORB_SLAM2::GeometricRegionPartitionResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            PartitionDepthByDiscontinuity(depth,0.025f,0.08f);
+
+    Require(result.stats.boundaryPixels==0 &&
+            result.stats.regionCount==1 &&
+            result.stats.largestRegionPixels==24,
+            "uniform plane must remain one diagnostic region");
+    Require(result.stats.largestRegionValidRatio==1.0,
+            "uniform-plane largest-region ratio is incorrect");
 }
 
 } // namespace
@@ -372,14 +529,20 @@ int main()
         TestRegionGrowStopsAtUnknownBarrier();
         TestMultiReferenceEvidenceCounts();
         TestCachedReferenceSelection();
+        TestOrbDepthSamplingEvidence();
+        TestGridDepthSamplingEvidence();
+        TestDepthBoundaryPartitionSplitsStep();
+        TestDepthBoundaryPartitionPreservesUnknown();
+        TestDepthBoundaryPartitionKeepsPlane();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0 Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R Test] PASS" << std::endl;
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0 Test] PASS"
+              << std::endl;
     return 0;
 }
