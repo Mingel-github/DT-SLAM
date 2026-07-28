@@ -41,6 +41,7 @@
 #include "JiGeometryBaseline.h"
 
 #include <mutex>
+#include <deque>
 #include <string>
 
 namespace ORB_SLAM2
@@ -181,6 +182,9 @@ protected:
     void UpdateDynamicFeaturesFromMask(Frame &frame, const cv::Mat &mask);
     int RemoveDynamicAssociations(Frame &frame);
     void RunGeometryShadow();
+    void RunMultiReferenceGeometryShadow();
+    void UpdateMultiReferenceGeometryHistory(
+        const cv::Mat &referenceDepth);
     void SaveGeometryDebugImages(const GeometricWarpResult &result);
     void RunJiGeometryShadow();
     void SaveJiGeometryDebugImages(
@@ -262,6 +266,48 @@ protected:
     std::string mGeometryFeatureShadowCsvPath;
     long unsigned int mnGeometryComputedFrames;
 
+    // G2-1/G2-2R multi-reference evidence and reference selection.
+    // Shadow-only.
+    bool mbGeometryMultiReferenceShadowEnabled;
+    int mnGeometryMultiReferenceMaxReferences;
+    int mnGeometryMultiReferenceHistorySize;
+    std::string mGeometryMultiReferenceSelectionPolicy;
+    std::string mGeometryMultiReferenceCsvPath;
+    std::string mGeometryReferenceSelectionCsvPath;
+    std::string mGeometryMultiReferenceDebugOutputDir;
+    long unsigned int mnGeometryMultiReferenceComputedFrames;
+    std::deque<GeometricReferenceFrame> mqGeometryKeyframeReferences;
+
+    struct GeometryMultiReferenceHistogramRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        int referenceCount;
+        int comparisonCount;
+        int positiveCount;
+        std::size_t pixelCount;
+        std::size_t semanticPixelCount;
+        GeometricMultiReferenceStats frameStats;
+    };
+    std::vector<GeometryMultiReferenceHistogramRecord>
+        mvGeometryMultiReferenceHistogram;
+
+    struct GeometryReferenceSelectionRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::string policy;
+        int requestedReferenceCount;
+        GeometricReferenceSelectionStats stats;
+        bool evidenceComputed;
+        std::vector<long unsigned int> selectedFrameIds;
+        std::vector<int> selectedCovisibilityWeights;
+        std::vector<long int> selectedFrameAges;
+        std::vector<GeometricPerReferenceStats> perReference;
+    };
+    std::vector<GeometryReferenceSelectionRecord>
+        mvGeometryReferenceSelectionDiagnostics;
+
     struct GeometryPoseDiagnosticRecord
     {
         long unsigned int frameId;
@@ -300,6 +346,7 @@ protected:
     bool mbJiGeometryShadowEnabled;
     bool mbJiGeometryReprojectionStatsEnabled;
     bool mbJiGeometryDebugSaveEnabled;
+    bool mbJiGeometryDebugRawLabelsOnly;
     int mnJiGeometryLogEveryN;
     int mnJiGeometryDebugEveryN;
     std::string mJiGeometryDebugOutputDir;

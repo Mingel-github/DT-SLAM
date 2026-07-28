@@ -644,4 +644,206 @@ void GeometricDynamicDetector::GrowDepthRegions(
     result.stats.totalMs += result.stats.regionGrowMs-previousRegionMs;
 }
 
+GeometricMultiReferenceResult
+GeometricDynamicDetector::ComputeMultiReferenceEvidence(
+    const std::vector<GeometricReferenceFrame> &references,
+    const cv::Mat &currentDepthMeters,
+    const cv::Mat &TcwCurrent,
+    const cv::Mat &K,
+    const float residualThresholdMeters)
+{
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+
+    ValidateDepth(currentDepthMeters,"current depth");
+    ValidatePose(TcwCurrent,"current Tcw");
+    ValidateCameraMatrix(K);
+    if(references.empty())
+        throw std::invalid_argument("multi-reference evidence requires at least one reference");
+    if(references.size()>255)
+        throw std::invalid_argument("multi-reference vote counts support at most 255 references");
+    if(!std::isfinite(residualThresholdMeters) ||
+       residualThresholdMeters<=0.0f)
+    {
+        throw std::invalid_argument(
+            "multi-reference residual threshold must be finite and positive");
+    }
+
+    GeometricMultiReferenceResult result;
+    result.comparisonCount =
+        cv::Mat::zeros(currentDepthMeters.size(),CV_8UC1);
+    result.positiveCount =
+        cv::Mat::zeros(currentDepthMeters.size(),CV_8UC1);
+    result.negativeCount =
+        cv::Mat::zeros(currentDepthMeters.size(),CV_8UC1);
+    result.consistentCount =
+        cv::Mat::zeros(currentDepthMeters.size(),CV_8UC1);
+    result.stats.referenceCount = references.size();
+
+    double warpAndEvidenceMs = 0.0;
+    const std::chrono::steady_clock::time_point aggregateStart =
+        std::chrono::steady_clock::now();
+    for(std::size_t referenceIndex=0;
+        referenceIndex<references.size(); ++referenceIndex)
+    {
+        const GeometricReferenceFrame &reference =
+            references[referenceIndex];
+        ValidateDepth(reference.depthMeters,"multi-reference depth");
+        ValidatePose(reference.Tcw,"multi-reference Tcw");
+        if(reference.depthMeters.size()!=currentDepthMeters.size())
+        {
+            throw std::invalid_argument(
+                "multi-reference and current depth images must have the same size");
+        }
+
+        GeometricWarpResult single = ComputeWarp(
+            reference.depthMeters,currentDepthMeters,reference.Tcw,
+            TcwCurrent,K);
+        ClassifyEvidence(single,residualThresholdMeters);
+        warpAndEvidenceMs += single.stats.totalMs;
+        GeometricPerReferenceStats perReference;
+        perReference.frameId = reference.frameId;
+        perReference.warp = single.stats;
+        result.perReference.push_back(perReference);
+
+        for(int v=0; v<currentDepthMeters.rows; ++v)
+        {
+            const unsigned char *validRow =
+                single.validComparisonMask.ptr<unsigned char>(v);
+            const unsigned char *positiveRow =
+                single.positiveSeedMask.ptr<unsigned char>(v);
+            const unsigned char *negativeRow =
+                single.negativeDiagnosticMask.ptr<unsigned char>(v);
+            const unsigned char *consistentRow =
+                single.consistentEvidenceMask.ptr<unsigned char>(v);
+            unsigned char *comparisonCountRow =
+                result.comparisonCount.ptr<unsigned char>(v);
+            unsigned char *positiveCountRow =
+                result.positiveCount.ptr<unsigned char>(v);
+            unsigned char *negativeCountRow =
+                result.negativeCount.ptr<unsigned char>(v);
+            unsigned char *consistentCountRow =
+                result.consistentCount.ptr<unsigned char>(v);
+
+            for(int u=0; u<currentDepthMeters.cols; ++u)
+            {
+                if(validRow[u]==0)
+                    continue;
+
+                ++comparisonCountRow[u];
+                if(positiveRow[u]!=0)
+                    ++positiveCountRow[u];
+                else if(negativeRow[u]!=0)
+                    ++negativeCountRow[u];
+                else if(consistentRow[u]!=0)
+                    ++consistentCountRow[u];
+                else
+                    throw std::logic_error(
+                        "valid comparison is missing a geometric evidence class");
+            }
+        }
+    }
+
+    const std::chrono::steady_clock::time_point aggregateEnd =
+        std::chrono::steady_clock::now();
+    for(int v=0; v<currentDepthMeters.rows; ++v)
+    {
+        const unsigned char *comparisonRow =
+            result.comparisonCount.ptr<unsigned char>(v);
+        const unsigned char *positiveRow =
+            result.positiveCount.ptr<unsigned char>(v);
+        const unsigned char *negativeRow =
+            result.negativeCount.ptr<unsigned char>(v);
+        const unsigned char *consistentRow =
+            result.consistentCount.ptr<unsigned char>(v);
+        for(int u=0; u<currentDepthMeters.cols; ++u)
+        {
+            const std::size_t comparisons = comparisonRow[u];
+            const std::size_t positives = positiveRow[u];
+            const std::size_t negatives = negativeRow[u];
+            const std::size_t consistent = consistentRow[u];
+            if(positives+negatives+consistent!=comparisons)
+            {
+                throw std::logic_error(
+                    "multi-reference evidence counts do not partition comparisons");
+            }
+            if(comparisons>0)
+                ++result.stats.pixelsWithComparison;
+            if(positives>0)
+                ++result.stats.pixelsWithPositiveEvidence;
+            result.stats.totalComparisons += comparisons;
+            result.stats.totalPositiveVotes += positives;
+            result.stats.totalNegativeVotes += negatives;
+            result.stats.totalConsistentVotes += consistent;
+        }
+    }
+
+    const std::chrono::steady_clock::time_point totalEnd =
+        std::chrono::steady_clock::now();
+    result.stats.warpAndEvidenceMs = warpAndEvidenceMs;
+    result.stats.aggregateMs =
+        std::chrono::duration<double,std::milli>(
+            aggregateEnd-aggregateStart).count()-warpAndEvidenceMs;
+    result.stats.aggregateMs = std::max(0.0,result.stats.aggregateMs);
+    result.stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            totalEnd-totalStart).count();
+    return result;
+}
+
+GeometricReferenceSelectionResult
+GeometricDynamicDetector::SelectCachedReferences(
+    const std::vector<GeometricReferenceFrame> &cachedReferences,
+    const std::vector<long unsigned int> &orderedCandidateFrameIds,
+    const std::size_t maximumReferences)
+{
+    if(maximumReferences==0)
+    {
+        throw std::invalid_argument(
+            "reference selection requires a positive maximum");
+    }
+
+    GeometricReferenceSelectionResult result;
+    std::vector<long unsigned int> uniqueCandidateIds;
+    uniqueCandidateIds.reserve(orderedCandidateFrameIds.size());
+    for(std::size_t candidateIndex=0;
+        candidateIndex<orderedCandidateFrameIds.size(); ++candidateIndex)
+    {
+        const long unsigned int candidateId =
+            orderedCandidateFrameIds[candidateIndex];
+        if(std::find(uniqueCandidateIds.begin(),uniqueCandidateIds.end(),
+                     candidateId)!=uniqueCandidateIds.end())
+        {
+            continue;
+        }
+        uniqueCandidateIds.push_back(candidateId);
+    }
+    result.stats.candidateCount = uniqueCandidateIds.size();
+
+    for(std::size_t candidateIndex=0;
+        candidateIndex<uniqueCandidateIds.size(); ++candidateIndex)
+    {
+        const long unsigned int candidateId =
+            uniqueCandidateIds[candidateIndex];
+        const GeometricReferenceFrame *matchedReference = NULL;
+        for(std::size_t cacheIndex=0;
+            cacheIndex<cachedReferences.size(); ++cacheIndex)
+        {
+            if(cachedReferences[cacheIndex].frameId==candidateId)
+            {
+                matchedReference = &cachedReferences[cacheIndex];
+                break;
+            }
+        }
+        if(!matchedReference)
+            continue;
+
+        ++result.stats.cachedReferenceMatchCount;
+        if(result.references.size()<maximumReferences)
+            result.references.push_back(*matchedReference);
+    }
+    result.stats.selectedReferenceCount = result.references.size();
+    return result;
+}
+
 } // namespace ORB_SLAM2

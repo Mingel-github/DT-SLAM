@@ -278,6 +278,83 @@ void TestRegionGrowStopsAtUnknownBarrier()
             "unknown and unseeded pixels beyond it must remain outside");
 }
 
+void TestMultiReferenceEvidenceCounts()
+{
+    const cv::Mat currentDepth(3,4,CV_32FC1,cv::Scalar(2.0f));
+    cv::Mat referenceDepthA = currentDepth.clone();
+    cv::Mat referenceDepthB = currentDepth.clone();
+    referenceDepthA.at<float>(1,1) = 3.0f;
+    referenceDepthB.at<float>(1,1) = 3.0f;
+    referenceDepthB.at<float>(1,2) = 1.0f;
+
+    cv::Mat K = cv::Mat::eye(3,3,CV_32F);
+    K.at<float>(0,0) = 100.0f;
+    K.at<float>(1,1) = 100.0f;
+    K.at<float>(0,2) = 1.5f;
+    K.at<float>(1,2) = 1.0f;
+
+    std::vector<ORB_SLAM2::GeometricReferenceFrame> references(2);
+    references[0].depthMeters = referenceDepthA;
+    references[0].Tcw = IdentityPose();
+    references[1].depthMeters = referenceDepthB;
+    references[1].Tcw = IdentityPose();
+
+    const ORB_SLAM2::GeometricMultiReferenceResult result =
+        ORB_SLAM2::GeometricDynamicDetector::ComputeMultiReferenceEvidence(
+            references,currentDepth,IdentityPose(),K,0.5f);
+
+    Require(result.comparisonCount.at<unsigned char>(1,1)==2,
+            "both references must contribute at the shared valid pixel");
+    Require(result.positiveCount.at<unsigned char>(1,1)==2,
+            "shared nearer current surface must receive two positive votes");
+    Require(result.negativeCount.at<unsigned char>(1,2)==1,
+            "one farther current surface must receive one negative vote");
+    Require(result.consistentCount.at<unsigned char>(1,2)==1,
+            "the other reference must remain consistent at the same pixel");
+    Require(result.stats.referenceCount==2 &&
+            result.stats.totalComparisons==2*currentDepth.total(),
+            "multi-reference statistics must count every valid comparison");
+    Require(result.stats.totalPositiveVotes==2 &&
+            result.stats.totalNegativeVotes==1,
+            "multi-reference evidence totals are incorrect");
+    Require(result.stats.totalPositiveVotes+
+            result.stats.totalNegativeVotes+
+            result.stats.totalConsistentVotes==
+            result.stats.totalComparisons,
+            "multi-reference evidence classes must partition comparisons");
+    Require(result.perReference.size()==2 &&
+            result.perReference[0].warp.validComparisons==
+                currentDepth.total() &&
+            result.perReference[1].warp.validComparisons==
+                currentDepth.total(),
+            "per-reference diagnostics must preserve each warp result");
+}
+
+void TestCachedReferenceSelection()
+{
+    std::vector<ORB_SLAM2::GeometricReferenceFrame> cached(3);
+    cached[0].frameId = 10;
+    cached[1].frameId = 20;
+    cached[2].frameId = 30;
+    const std::vector<long unsigned int> candidates =
+        {30,99,20,20,10};
+
+    const ORB_SLAM2::GeometricReferenceSelectionResult result =
+        ORB_SLAM2::GeometricDynamicDetector::SelectCachedReferences(
+            cached,candidates,2);
+
+    Require(result.stats.candidateCount==4,
+            "duplicate candidate frame ids must be counted once");
+    Require(result.stats.cachedReferenceMatchCount==3,
+            "selection diagnostics must count all cached candidate matches");
+    Require(result.stats.selectedReferenceCount==2 &&
+            result.references.size()==2,
+            "selection must respect the configured maximum");
+    Require(result.references[0].frameId==30 &&
+            result.references[1].frameId==20,
+            "selection must preserve the caller's candidate priority");
+}
+
 } // namespace
 
 int main()
@@ -293,14 +370,16 @@ int main()
         TestZBuffer();
         TestRegionGrowStopsAtDepthBoundary();
         TestRegionGrowStopsAtUnknownBarrier();
+        TestMultiReferenceEvidenceCounts();
+        TestCachedReferenceSelection();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0-3R Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0-3R Test] PASS" << std::endl;
+    std::cout << "[Geometry G0/G2-1/G2-2R Test] PASS" << std::endl;
     return 0;
 }

@@ -87,6 +87,58 @@ struct GeometricWarpResult
     GeometricWarpStats stats;
 };
 
+struct GeometricReferenceFrame
+{
+    cv::Mat depthMeters;
+    cv::Mat Tcw;
+    long unsigned int frameId = 0;
+    double timestampSeconds = 0.0;
+};
+
+struct GeometricReferenceSelectionStats
+{
+    std::size_t candidateCount = 0;
+    std::size_t cachedReferenceMatchCount = 0;
+    std::size_t selectedReferenceCount = 0;
+};
+
+struct GeometricReferenceSelectionResult
+{
+    std::vector<GeometricReferenceFrame> references;
+    GeometricReferenceSelectionStats stats;
+};
+
+struct GeometricPerReferenceStats
+{
+    long unsigned int frameId = 0;
+    GeometricWarpStats warp;
+};
+
+struct GeometricMultiReferenceStats
+{
+    std::size_t referenceCount = 0;
+    std::size_t pixelsWithComparison = 0;
+    std::size_t totalComparisons = 0;
+    std::size_t pixelsWithPositiveEvidence = 0;
+    std::size_t totalPositiveVotes = 0;
+    std::size_t totalNegativeVotes = 0;
+    std::size_t totalConsistentVotes = 0;
+    double warpAndEvidenceMs = 0.0;
+    double aggregateMs = 0.0;
+    double totalMs = 0.0;
+};
+
+struct GeometricMultiReferenceResult
+{
+    // CV_8UC1 vote counts. Zero comparisonCount means no geometry evidence.
+    cv::Mat comparisonCount;
+    cv::Mat positiveCount;
+    cv::Mat negativeCount;
+    cv::Mat consistentCount;
+    std::vector<GeometricPerReferenceStats> perReference;
+    GeometricMultiReferenceStats stats;
+};
+
 class GeometricDynamicDetector
 {
 public:
@@ -129,6 +181,23 @@ public:
     static void GrowDepthRegions(const cv::Mat &currentDepthMeters,
                                  GeometricWarpResult &result,
                                  const float depthThresholdMeters);
+
+    // G2-1 multi-reference evidence accumulation. This produces vote counts
+    // only and deliberately makes no binary dynamic decision.
+    static GeometricMultiReferenceResult ComputeMultiReferenceEvidence(
+        const std::vector<GeometricReferenceFrame> &references,
+        const cv::Mat &currentDepthMeters,
+        const cv::Mat &TcwCurrent,
+        const cv::Mat &K,
+        const float residualThresholdMeters);
+
+    // G2-2R pure selection helper. Candidate frame ids must already be
+    // ordered by the caller's reference policy. Missing cache entries remain
+    // unavailable and are never replaced by a different reference.
+    static GeometricReferenceSelectionResult SelectCachedReferences(
+        const std::vector<GeometricReferenceFrame> &cachedReferences,
+        const std::vector<long unsigned int> &orderedCandidateFrameIds,
+        const std::size_t maximumReferences);
 
 private:
     cv::Mat mK;
