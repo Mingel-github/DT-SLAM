@@ -294,8 +294,13 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mGeometryMultiReferenceSelectionPolicy("recent"),
     mGeometryMultiReferenceSamplingPolicy("dense"),
     mnGeometryMultiReferenceGridStride(4),
+    mnGeometryMultiReferencePyramidScale(2),
     mbGeometryMultiReferenceDenseAuditEnabled(false),
     mnGeometryMultiReferenceComputedFrames(0),
+    mbGeometryRegionEvidenceShadowEnabled(false),
+    mGeometryRegionRelativeThreshold(0.025f),
+    mGeometryRegionAbsoluteThresholdMeters(0.08f),
+    mnGeometryRegionEvidenceComputedFrames(0),
     mbJiGeometryShadowEnabled(false),
     mbJiGeometryReprojectionStatsEnabled(false),
     mbJiGeometryDebugSaveEnabled(false),
@@ -538,11 +543,13 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     }
     if(mGeometryMultiReferenceSamplingPolicy!="dense" &&
        mGeometryMultiReferenceSamplingPolicy!="orb_depth" &&
-       mGeometryMultiReferenceSamplingPolicy!="grid_depth")
+       mGeometryMultiReferenceSamplingPolicy!="grid_depth" &&
+       mGeometryMultiReferenceSamplingPolicy!="pyramid_dense")
     {
         throw std::invalid_argument(
             "Geometry.MultiReferenceSamplingPolicy must be "
-            "'dense', 'orb_depth', or 'grid_depth'");
+            "'dense', 'orb_depth', 'grid_depth', or "
+            "'pyramid_dense'");
     }
     const cv::FileNode geometryMultiReferenceGridStrideNode =
         fSettings["Geometry.MultiReferenceGridStride"];
@@ -564,6 +571,20 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         throw std::invalid_argument(
             "Geometry.MultiReferenceGridStride must be in [1,64]");
     }
+    const cv::FileNode geometryMultiReferencePyramidScaleNode =
+        fSettings["Geometry.MultiReferencePyramidScale"];
+    if(!geometryMultiReferencePyramidScaleNode.empty())
+    {
+        mnGeometryMultiReferencePyramidScale =
+            static_cast<int>(
+                geometryMultiReferencePyramidScaleNode);
+    }
+    if(mnGeometryMultiReferencePyramidScale!=2)
+    {
+        throw std::invalid_argument(
+            "Geometry.MultiReferencePyramidScale currently supports "
+            "only scale 2");
+    }
     const char *denseSamplingAudit =
         std::getenv("DT_SLAM_GEOMETRY_DENSE_SAMPLING_AUDIT");
     if(denseSamplingAudit && denseSamplingAudit[0]!='\0' &&
@@ -577,6 +598,47 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         throw std::invalid_argument(
             "DT_SLAM_GEOMETRY_DENSE_SAMPLING_AUDIT requires "
             "a non-dense Geometry.MultiReferenceSamplingPolicy");
+    }
+    const cv::FileNode geometryRegionEvidenceEnableNode =
+        fSettings["Geometry.RegionEvidenceShadowEnable"];
+    if(!geometryRegionEvidenceEnableNode.empty())
+    {
+        mbGeometryRegionEvidenceShadowEnabled =
+            static_cast<int>(
+                geometryRegionEvidenceEnableNode)!=0;
+    }
+    const cv::FileNode geometryRegionRelativeThresholdNode =
+        fSettings["Geometry.RegionPartitionRelativeThreshold"];
+    if(!geometryRegionRelativeThresholdNode.empty())
+    {
+        mGeometryRegionRelativeThreshold =
+            static_cast<float>(
+                geometryRegionRelativeThresholdNode);
+    }
+    const cv::FileNode geometryRegionAbsoluteThresholdNode =
+        fSettings["Geometry.RegionPartitionAbsoluteThresholdM"];
+    if(!geometryRegionAbsoluteThresholdNode.empty())
+    {
+        mGeometryRegionAbsoluteThresholdMeters =
+            static_cast<float>(
+                geometryRegionAbsoluteThresholdNode);
+    }
+    if(!std::isfinite(mGeometryRegionRelativeThreshold) ||
+       mGeometryRegionRelativeThreshold<0.0f ||
+       !std::isfinite(
+           mGeometryRegionAbsoluteThresholdMeters) ||
+       mGeometryRegionAbsoluteThresholdMeters<=0.0f)
+    {
+        throw std::invalid_argument(
+            "Geometry region partition thresholds must be finite; "
+            "relative must be non-negative and absolute must be positive");
+    }
+    if(mbGeometryRegionEvidenceShadowEnabled &&
+       !mbGeometryMultiReferenceShadowEnabled)
+    {
+        throw std::invalid_argument(
+            "Geometry.RegionEvidenceShadowEnable=1 requires "
+            "Geometry.MultiReferenceShadowEnable=1");
     }
     if(mnGeometryMultiReferenceMaxReferences<1 ||
        mnGeometryMultiReferenceMaxReferences>255)
@@ -639,6 +701,10 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         std::getenv("DT_SLAM_GEOMETRY_REFERENCE_SELECTION_CSV");
     if(referenceSelectionCsv && referenceSelectionCsv[0]!='\0')
         mGeometryReferenceSelectionCsvPath = referenceSelectionCsv;
+    const char *regionEvidenceCsv =
+        std::getenv("DT_SLAM_GEOMETRY_REGION_EVIDENCE_CSV");
+    if(regionEvidenceCsv && regionEvidenceCsv[0]!='\0')
+        mGeometryRegionEvidenceCsvPath = regionEvidenceCsv;
     const char *multiReferenceDebugDir =
         std::getenv("DT_SLAM_GEOMETRY_MULTIREF_DEBUG_DIR");
     if(multiReferenceDebugDir &&
@@ -832,6 +898,12 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
                      << mnGeometryMultiReferenceGridStride
                      << " pixels" << endl;
             }
+            if(mGeometryMultiReferenceSamplingPolicy=="pyramid_dense")
+            {
+                cout << "- G2 boundary-preserving pyramid scale: "
+                     << mnGeometryMultiReferencePyramidScale
+                     << endl;
+            }
             cout << "- G2 sampling same-reference dense audit: "
                  << (mbGeometryMultiReferenceDenseAuditEnabled
                          ? "enabled" : "disabled") << endl;
@@ -855,6 +927,24 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             {
                 cout << "- G2-1 raw count images: "
                      << mGeometryMultiReferenceDebugOutputDir << endl;
+            }
+            cout << "- G2-3R1 region evidence aggregation: "
+                 << (mbGeometryRegionEvidenceShadowEnabled
+                         ? "enabled" : "disabled") << endl;
+            if(mbGeometryRegionEvidenceShadowEnabled)
+            {
+                cout << "- G2-3R1 depth boundary thresholds: relative="
+                     << mGeometryRegionRelativeThreshold
+                     << ", absolute="
+                     << mGeometryRegionAbsoluteThresholdMeters
+                     << " m" << endl;
+                cout << "- G2-3R1 output: per-region evidence "
+                     << "distributions; dynamic decision=none" << endl;
+                if(!mGeometryRegionEvidenceCsvPath.empty())
+                {
+                    cout << "- G2-3R1 region diagnostics: "
+                         << mGeometryRegionEvidenceCsvPath << endl;
+                }
             }
         }
     }
@@ -1122,7 +1212,8 @@ void Tracking::SaveGeometryPoseDiagnostics()
                    << "pixels_with_comparison,total_comparisons,"
                    << "pixels_with_positive,total_positive_votes,"
                    << "total_negative_votes,total_consistent_votes,"
-                   << "warp_evidence_ms,aggregate_ms,total_ms\n";
+                   << "warp_evidence_ms,aggregate_ms,preprocess_ms,"
+                   << "expand_ms,total_ms\n";
             stream << std::setprecision(15);
             for(std::size_t index=0;
                 index<mvGeometryMultiReferenceHistogram.size(); ++index)
@@ -1147,6 +1238,8 @@ void Tracking::SaveGeometryPoseDiagnostics()
                        << stats.totalConsistentVotes << ","
                        << stats.warpAndEvidenceMs << ","
                        << stats.aggregateMs << ","
+                       << stats.preprocessMs << ","
+                       << stats.expandMs << ","
                        << stats.totalMs << "\n";
             }
             stream.close();
@@ -1154,6 +1247,101 @@ void Tracking::SaveGeometryPoseDiagnostics()
                  << mvGeometryMultiReferenceHistogram.size()
                  << " histogram rows to "
                  << mGeometryMultiReferenceCsvPath << endl;
+        }
+    }
+
+    if(!mGeometryRegionEvidenceCsvPath.empty() &&
+       !mvGeometryRegionEvidenceDiagnostics.empty())
+    {
+        ofstream stream(mGeometryRegionEvidenceCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-3R1] failed to open region CSV: "
+                 << mGeometryRegionEvidenceCsvPath << endl;
+        }
+        else
+        {
+            stream << "frame,timestamp,sampling_policy,region_label,"
+                   << "region_pixels,semantic_proxy_pixels,"
+                   << "semantic_comparison_pixels,"
+                   << "semantic_positive_presence_pixels,"
+                   << "semantic_negative_presence_pixels,"
+                   << "semantic_consistent_presence_pixels,"
+                   << "semantic_proxy_region_ratio,"
+                   << "semantic_comparison_coverage,"
+                   << "semantic_positive_compared_pixel_ratio,"
+                   << "comparison_pixels,"
+                   << "positive_presence_pixels,"
+                   << "negative_presence_pixels,"
+                   << "consistent_presence_pixels,"
+                   << "comparison_votes,positive_votes,negative_votes,"
+                   << "consistent_votes,comparison_coverage,"
+                   << "positive_compared_pixel_ratio,"
+                   << "negative_compared_pixel_ratio,"
+                   << "consistent_compared_pixel_ratio,"
+                   << "positive_vote_ratio,negative_vote_ratio,"
+                   << "consistent_vote_ratio,valid_depth_pixels,"
+                   << "boundary_pixels,partition_region_count,"
+                   << "largest_region_valid_ratio,"
+                   << "top_five_region_valid_ratio,partition_ms,"
+                   << "regions_with_comparison,"
+                   << "regions_with_positive,aggregation_ms\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<mvGeometryRegionEvidenceDiagnostics.size();
+                ++index)
+            {
+                const GeometryRegionEvidenceRecord &record =
+                    mvGeometryRegionEvidenceDiagnostics[index];
+                const GeometricRegionEvidenceStats &region =
+                    record.region;
+                const GeometricRegionPartitionStats &partition =
+                    record.partitionStats;
+                const GeometricRegionEvidenceAggregationStats
+                    &aggregation = record.aggregationStats;
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.samplingPolicy << ","
+                       << region.regionLabel << ","
+                       << region.regionPixels << ","
+                       << region.semanticProxyPixels << ","
+                       << region.semanticComparisonPixels << ","
+                       << region.semanticPositivePresencePixels << ","
+                       << region.semanticNegativePresencePixels << ","
+                       << region.semanticConsistentPresencePixels << ","
+                       << region.semanticProxyRegionRatio << ","
+                       << region.semanticComparisonCoverage << ","
+                       << region.semanticPositiveComparedPixelRatio << ","
+                       << region.comparisonPixels << ","
+                       << region.positivePresencePixels << ","
+                       << region.negativePresencePixels << ","
+                       << region.consistentPresencePixels << ","
+                       << region.comparisonVotes << ","
+                       << region.positiveVotes << ","
+                       << region.negativeVotes << ","
+                       << region.consistentVotes << ","
+                       << region.comparisonCoverage << ","
+                       << region.positiveComparedPixelRatio << ","
+                       << region.negativeComparedPixelRatio << ","
+                       << region.consistentComparedPixelRatio << ","
+                       << region.positiveVoteRatio << ","
+                       << region.negativeVoteRatio << ","
+                       << region.consistentVoteRatio << ","
+                       << partition.validDepthPixels << ","
+                       << partition.boundaryPixels << ","
+                       << partition.regionCount << ","
+                       << partition.largestRegionValidRatio << ","
+                       << partition.topFiveRegionValidRatio << ","
+                       << partition.totalMs << ","
+                       << aggregation.regionsWithComparison << ","
+                       << aggregation.regionsWithPositiveEvidence << ","
+                       << aggregation.totalMs << "\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-3R1] saved "
+                 << mvGeometryRegionEvidenceDiagnostics.size()
+                 << " region rows to "
+                 << mGeometryRegionEvidenceCsvPath << endl;
         }
     }
 
@@ -1380,6 +1568,7 @@ void Tracking::SaveGeometryPoseDiagnostics()
     mvGeometrySemanticProxyDiagnostics.clear();
     mvGeometryFeatureShadowDiagnostics.clear();
     mvGeometryMultiReferenceHistogram.clear();
+    mvGeometryRegionEvidenceDiagnostics.clear();
     mvGeometryReferenceSelectionDiagnostics.clear();
     mvJiGeometryClusterDiagnostics.clear();
     mvJiGeometryReprojectionDiagnostics.clear();
@@ -1864,6 +2053,13 @@ void Tracking::RunMultiReferenceGeometryShadow()
               << mnGeometryMultiReferenceGridStride;
         samplingPolicyLabel = label.str();
     }
+    else if(mGeometryMultiReferenceSamplingPolicy=="pyramid_dense")
+    {
+        std::ostringstream label;
+        label << "pyramid_dense_s"
+              << mnGeometryMultiReferencePyramidScale;
+        samplingPolicyLabel = label.str();
+    }
 
     std::vector<GeometricReferenceFrame> cachedReferences(
         mqGeometryKeyframeReferences.begin(),
@@ -2026,16 +2222,39 @@ void Tracking::RunMultiReferenceGeometryShadow()
     GeometricMultiReferenceResult result;
     try
     {
-        result =
-            GeometricDynamicDetector::ComputeMultiReferenceEvidence(
-                references,mCurrentDepthMeters,mCurrentFrame.mTcw,
-                mGeometryK,
-                mGeometricDetector.ResidualThresholdMeters(),
-                mGeometryMultiReferenceSamplingPolicy=="orb_depth"
-                    ? GeometricReferenceSamplingPolicy::OrbDepth
-                    : (mGeometryMultiReferenceSamplingPolicy=="grid_depth"
-                        ? GeometricReferenceSamplingPolicy::GridDepth
-                        : GeometricReferenceSamplingPolicy::Dense));
+        if(mGeometryMultiReferenceSamplingPolicy=="pyramid_dense")
+        {
+            result =
+                GeometricDynamicDetector::
+                    ComputePyramidMultiReferenceEvidence(
+                        references,mCurrentDepthMeters,
+                        mCurrentFrame.mTcw,mGeometryK,
+                        mGeometricDetector.
+                            ResidualThresholdMeters(),
+                        mnGeometryMultiReferencePyramidScale,
+                        mGeometryRegionRelativeThreshold,
+                        mGeometryRegionAbsoluteThresholdMeters);
+        }
+        else
+        {
+            result =
+                GeometricDynamicDetector::
+                    ComputeMultiReferenceEvidence(
+                        references,mCurrentDepthMeters,
+                        mCurrentFrame.mTcw,mGeometryK,
+                        mGeometricDetector.
+                            ResidualThresholdMeters(),
+                        mGeometryMultiReferenceSamplingPolicy==
+                            "orb_depth"
+                            ? GeometricReferenceSamplingPolicy::
+                                OrbDepth
+                            : (mGeometryMultiReferenceSamplingPolicy==
+                                    "grid_depth"
+                                ? GeometricReferenceSamplingPolicy::
+                                    GridDepth
+                                : GeometricReferenceSamplingPolicy::
+                                    Dense));
+        }
     }
     catch(const std::exception &error)
     {
@@ -2115,6 +2334,88 @@ void Tracking::RunMultiReferenceGeometryShadow()
     }
     mvGeometryReferenceSelectionDiagnostics.push_back(
         selectionRecord);
+
+    GeometricRegionPartitionResult regionPartition;
+    GeometricRegionEvidenceAggregationResult regionAggregation;
+    GeometricRegionEvidenceAggregationResult
+        denseRegionAggregation;
+    bool hasRegionEvidenceAggregation = false;
+    bool hasDenseRegionEvidenceAggregation = false;
+    if(mbGeometryRegionEvidenceShadowEnabled)
+    {
+        try
+        {
+            regionPartition =
+                GeometricDynamicDetector::
+                    PartitionDepthByDiscontinuity(
+                        mCurrentDepthMeters,
+                        mGeometryRegionRelativeThreshold,
+                        mGeometryRegionAbsoluteThresholdMeters);
+            regionAggregation =
+                GeometricDynamicDetector::
+                    AggregateMultiReferenceEvidenceByRegion(
+                        regionPartition,result,
+                        mCurrentFrame.mSemanticMask);
+            hasRegionEvidenceAggregation = true;
+            ++mnGeometryRegionEvidenceComputedFrames;
+
+            for(std::size_t regionIndex=0;
+                regionIndex<regionAggregation.regions.size();
+                ++regionIndex)
+            {
+                GeometryRegionEvidenceRecord record;
+                record.frameId = mCurrentFrame.mnId;
+                record.timestamp = mCurrentFrame.mTimeStamp;
+                record.samplingPolicy = samplingPolicyLabel;
+                record.partitionStats = regionPartition.stats;
+                record.aggregationStats =
+                    regionAggregation.stats;
+                record.region =
+                    regionAggregation.regions[regionIndex];
+                mvGeometryRegionEvidenceDiagnostics.push_back(
+                    record);
+            }
+
+            if(hasDenseAuditResult)
+            {
+                denseRegionAggregation =
+                    GeometricDynamicDetector::
+                        AggregateMultiReferenceEvidenceByRegion(
+                            regionPartition,denseAuditResult,
+                            mCurrentFrame.mSemanticMask);
+                hasDenseRegionEvidenceAggregation = true;
+
+                for(std::size_t regionIndex=0;
+                    regionIndex<
+                        denseRegionAggregation.regions.size();
+                    ++regionIndex)
+                {
+                    GeometryRegionEvidenceRecord record;
+                    record.frameId = mCurrentFrame.mnId;
+                    record.timestamp =
+                        mCurrentFrame.mTimeStamp;
+                    record.samplingPolicy =
+                        "dense_same_reference_audit";
+                    record.partitionStats =
+                        regionPartition.stats;
+                    record.aggregationStats =
+                        denseRegionAggregation.stats;
+                    record.region =
+                        denseRegionAggregation.regions[
+                            regionIndex];
+                    mvGeometryRegionEvidenceDiagnostics.push_back(
+                        record);
+                }
+            }
+        }
+        catch(const std::exception &error)
+        {
+            cerr << "[Geometry G2-3R1/G2-3R2] frame="
+                 << mCurrentFrame.mnId
+                 << " region evidence aggregation failed: "
+                 << error.what() << endl;
+        }
+    }
 
     if(!mGeometryMultiReferenceDebugOutputDir.empty())
     {
@@ -2265,11 +2566,33 @@ void Tracking::RunMultiReferenceGeometryShadow()
              << result.stats.warpAndEvidenceMs
              << " aggregate_ms="
              << result.stats.aggregateMs
+             << " preprocess_ms="
+             << result.stats.preprocessMs
+             << " expand_ms="
+             << result.stats.expandMs
              << " total_ms="
              << result.stats.totalMs
              << " same_reference_dense_audit_ms="
              << (hasDenseAuditResult
                      ? denseAuditResult.stats.totalMs : -1.0)
+             << " region_partition_ms="
+             << (hasRegionEvidenceAggregation
+                     ? regionPartition.stats.totalMs : -1.0)
+             << " region_aggregation_ms="
+             << (hasRegionEvidenceAggregation
+                     ? regionAggregation.stats.totalMs : -1.0)
+             << " dense_region_aggregation_ms="
+             << (hasDenseRegionEvidenceAggregation
+                     ? denseRegionAggregation.stats.totalMs : -1.0)
+             << " region_count="
+             << (hasRegionEvidenceAggregation
+                     ? regionAggregation.stats.regionCount : 0)
+             << " regions_with_comparison="
+             << (hasRegionEvidenceAggregation
+                     ? regionAggregation.stats.regionsWithComparison : 0)
+             << " regions_with_positive="
+             << (hasRegionEvidenceAggregation
+                     ? regionAggregation.stats.regionsWithPositiveEvidence : 0)
              << " dynamic_decision=none"
              << " direct_slam_state_mutation=none"
              << endl;
@@ -2296,6 +2619,16 @@ void Tracking::UpdateMultiReferenceGeometryHistory(
 
     GeometricReferenceFrame reference;
     reference.depthMeters = referenceDepth.clone();
+    if(mGeometryMultiReferenceSamplingPolicy=="pyramid_dense")
+    {
+        reference.pyramidDepthMeters =
+            GeometricDynamicDetector::
+                DownsampleDepthBoundaryAware(
+                    referenceDepth,
+                    mnGeometryMultiReferencePyramidScale,
+                    mGeometryRegionRelativeThreshold,
+                    mGeometryRegionAbsoluteThresholdMeters);
+    }
     reference.Tcw = mCurrentFrame.mTcw.clone();
     reference.frameId = mCurrentFrame.mnId;
     reference.timestampSeconds = mCurrentFrame.mTimeStamp;
@@ -4175,10 +4508,12 @@ void Tracking::Reset()
     mvGeometrySemanticProxyDiagnostics.clear();
     mvGeometryFeatureShadowDiagnostics.clear();
     mvGeometryMultiReferenceHistogram.clear();
+    mvGeometryRegionEvidenceDiagnostics.clear();
     mvGeometryReferenceSelectionDiagnostics.clear();
     mqGeometryKeyframeReferences.clear();
     mnGeometryComputedFrames = 0;
     mnGeometryMultiReferenceComputedFrames = 0;
+    mnGeometryRegionEvidenceComputedFrames = 0;
 
     if(mpInitializer)
     {

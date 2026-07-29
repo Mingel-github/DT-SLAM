@@ -512,6 +512,145 @@ void TestDepthBoundaryPartitionKeepsPlane()
             "uniform-plane largest-region ratio is incorrect");
 }
 
+void TestPyramidDepthAndEvidence()
+{
+    const cv::Mat depth = (cv::Mat_<float>(4,4) <<
+        1.00f,1.02f,2.00f,2.03f,
+        1.04f,1.06f,2.04f,2.06f,
+        0.00f,1.00f,3.00f,3.02f,
+        1.00f,1.00f,3.04f,4.00f);
+
+    const cv::Mat pyramid =
+        ORB_SLAM2::GeometricDynamicDetector::
+            DownsampleDepthBoundaryAware(
+                depth,2,0.025f,0.08f);
+    Require(pyramid.rows==2 && pyramid.cols==2,
+            "2x depth pyramid has the wrong size");
+    Require(std::abs(
+                pyramid.at<float>(0,0)-1.03f)<1e-6f &&
+            std::abs(
+                pyramid.at<float>(0,1)-2.0325f)<1e-6f &&
+            pyramid.at<float>(1,0)==0.0f &&
+            std::abs(
+                pyramid.at<float>(1,1)-3.02f)<1e-6f,
+            "boundary-aware block averaging is incorrect");
+
+    cv::Mat K = cv::Mat::eye(3,3,CV_32F);
+    K.at<float>(0,0) = 100.0f;
+    K.at<float>(1,1) = 120.0f;
+    K.at<float>(0,2) = 2.0f;
+    K.at<float>(1,2) = 3.0f;
+    const cv::Mat scaledK =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ScaleCameraMatrix(K,2);
+    Require(scaledK.at<float>(0,0)==50.0f &&
+            scaledK.at<float>(1,1)==60.0f &&
+            scaledK.at<float>(0,2)==1.0f &&
+            scaledK.at<float>(1,2)==1.5f,
+            "pyramid camera intrinsics are incorrect");
+
+    ORB_SLAM2::GeometricReferenceFrame reference;
+    reference.depthMeters = depth;
+    reference.pyramidDepthMeters = pyramid;
+    reference.Tcw = IdentityPose();
+    reference.frameId = 1;
+    std::vector<ORB_SLAM2::GeometricReferenceFrame> references(
+        1,reference);
+    const ORB_SLAM2::GeometricMultiReferenceResult evidence =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputePyramidMultiReferenceEvidence(
+                references,depth,IdentityPose(),K,
+                0.10f,2,0.025f,0.08f);
+
+    Require(evidence.comparisonCount.size()==depth.size() &&
+            evidence.positiveCount.size()==depth.size(),
+            "expanded pyramid evidence has the wrong size");
+    Require(evidence.stats.pixelsWithComparison==12 &&
+            evidence.stats.totalComparisons==12 &&
+            evidence.stats.pixelsWithPositiveEvidence==0 &&
+            evidence.stats.totalPositiveVotes==0 &&
+            evidence.stats.totalNegativeVotes==0 &&
+            evidence.stats.totalConsistentVotes==12,
+            "identity pyramid evidence counts are incorrect");
+}
+
+void TestRegionEvidenceAggregation()
+{
+    ORB_SLAM2::GeometricRegionPartitionResult partition;
+    partition.labels = (cv::Mat_<int>(2,4) <<
+        0,0,-2,1,
+        0,0,-1,1);
+    partition.regionSizes.push_back(4);
+    partition.regionSizes.push_back(2);
+
+    ORB_SLAM2::GeometricMultiReferenceResult evidence;
+    evidence.comparisonCount = cv::Mat::zeros(2,4,CV_8UC1);
+    evidence.positiveCount = cv::Mat::zeros(2,4,CV_8UC1);
+    evidence.negativeCount = cv::Mat::zeros(2,4,CV_8UC1);
+    evidence.consistentCount = cv::Mat::zeros(2,4,CV_8UC1);
+
+    evidence.comparisonCount.at<unsigned char>(0,0) = 2;
+    evidence.positiveCount.at<unsigned char>(0,0) = 1;
+    evidence.consistentCount.at<unsigned char>(0,0) = 1;
+    evidence.comparisonCount.at<unsigned char>(0,1) = 1;
+    evidence.consistentCount.at<unsigned char>(0,1) = 1;
+    evidence.comparisonCount.at<unsigned char>(1,0) = 1;
+    evidence.negativeCount.at<unsigned char>(1,0) = 1;
+    evidence.comparisonCount.at<unsigned char>(0,2) = 1;
+    evidence.positiveCount.at<unsigned char>(0,2) = 1;
+    evidence.comparisonCount.at<unsigned char>(1,2) = 1;
+    evidence.positiveCount.at<unsigned char>(1,2) = 1;
+    evidence.comparisonCount.at<unsigned char>(0,3) = 1;
+    evidence.positiveCount.at<unsigned char>(0,3) = 1;
+
+    cv::Mat semantic = cv::Mat::zeros(2,4,CV_8UC1);
+    semantic.at<unsigned char>(0,0) = 255;
+    semantic.at<unsigned char>(0,3) = 255;
+    semantic.at<unsigned char>(1,3) = 255;
+
+    const ORB_SLAM2::GeometricRegionEvidenceAggregationResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            AggregateMultiReferenceEvidenceByRegion(
+                partition,evidence,semantic);
+
+    Require(result.regions.size()==2 &&
+            result.stats.regionPixels==6 &&
+            result.stats.comparisonPixels==4 &&
+            result.stats.comparisonVotes==5,
+            "region evidence aggregate totals are incorrect");
+    const ORB_SLAM2::GeometricRegionEvidenceStats &first =
+        result.regions[0];
+    Require(first.regionPixels==4 &&
+            first.semanticProxyPixels==1 &&
+            first.semanticComparisonPixels==1 &&
+            first.semanticPositivePresencePixels==1 &&
+            first.comparisonPixels==3 &&
+            first.positivePresencePixels==1 &&
+            first.negativePresencePixels==1 &&
+            first.consistentPresencePixels==2,
+            "first-region evidence presence is incorrect");
+    Require(first.comparisonVotes==4 &&
+            first.positiveVotes==1 &&
+            first.negativeVotes==1 &&
+            first.consistentVotes==2,
+            "first-region vote sums are incorrect");
+    Require(std::abs(first.comparisonCoverage-0.75)<1e-9 &&
+            std::abs(first.positiveVoteRatio-0.25)<1e-9,
+            "first-region evidence ratios are incorrect");
+    const ORB_SLAM2::GeometricRegionEvidenceStats &second =
+        result.regions[1];
+    Require(second.regionPixels==2 &&
+            second.semanticProxyPixels==2 &&
+            second.semanticComparisonPixels==1 &&
+            second.semanticPositivePresencePixels==1 &&
+            second.comparisonPixels==1 &&
+            second.positivePresencePixels==1,
+            "second-region evidence aggregation is incorrect");
+    Require(result.stats.regionsWithComparison==2 &&
+            result.stats.regionsWithPositiveEvidence==2,
+            "region evidence aggregate region counts are incorrect");
+}
+
 } // namespace
 
 int main()
@@ -534,15 +673,17 @@ int main()
         TestDepthBoundaryPartitionSplitsStep();
         TestDepthBoundaryPartitionPreservesUnknown();
         TestDepthBoundaryPartitionKeepsPlane();
+        TestPyramidDepthAndEvidence();
+        TestRegionEvidenceAggregation();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0 Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3 Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0 Test] PASS"
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3 Test] PASS"
               << std::endl;
     return 0;
 }

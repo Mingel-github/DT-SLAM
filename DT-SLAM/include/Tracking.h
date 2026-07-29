@@ -275,6 +275,7 @@ protected:
     std::string mGeometryMultiReferenceSelectionPolicy;
     std::string mGeometryMultiReferenceSamplingPolicy;
     int mnGeometryMultiReferenceGridStride;
+    int mnGeometryMultiReferencePyramidScale;
     bool mbGeometryMultiReferenceDenseAuditEnabled;
     std::string mGeometryMultiReferenceCsvPath;
     std::string mGeometryReferenceSelectionCsvPath;
@@ -296,6 +297,25 @@ protected:
     };
     std::vector<GeometryMultiReferenceHistogramRecord>
         mvGeometryMultiReferenceHistogram;
+
+    // G2-3R1 fixed-region evidence distributions. Shadow-only.
+    bool mbGeometryRegionEvidenceShadowEnabled;
+    float mGeometryRegionRelativeThreshold;
+    float mGeometryRegionAbsoluteThresholdMeters;
+    std::string mGeometryRegionEvidenceCsvPath;
+    long unsigned int mnGeometryRegionEvidenceComputedFrames;
+
+    struct GeometryRegionEvidenceRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::string samplingPolicy;
+        GeometricRegionPartitionStats partitionStats;
+        GeometricRegionEvidenceAggregationStats aggregationStats;
+        GeometricRegionEvidenceStats region;
+    };
+    std::vector<GeometryRegionEvidenceRecord>
+        mvGeometryRegionEvidenceDiagnostics;
 
     struct GeometryReferenceSelectionRecord
     {

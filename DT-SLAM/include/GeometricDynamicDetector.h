@@ -90,6 +90,8 @@ struct GeometricWarpResult
 struct GeometricReferenceFrame
 {
     cv::Mat depthMeters;
+    // G2-3R3 cached boundary-preserving 2x depth-pyramid level.
+    cv::Mat pyramidDepthMeters;
     cv::Mat Tcw;
     // G2-2S raw RGB/depth-domain ORB pixels with valid static depth.
     std::vector<cv::Point2i> featureDepthPixels;
@@ -103,7 +105,8 @@ enum class GeometricReferenceSamplingPolicy
 {
     Dense,
     OrbDepth,
-    GridDepth
+    GridDepth,
+    PyramidDense
 };
 
 struct GeometricReferenceSelectionStats
@@ -136,6 +139,8 @@ struct GeometricMultiReferenceStats
     std::size_t totalConsistentVotes = 0;
     double warpAndEvidenceMs = 0.0;
     double aggregateMs = 0.0;
+    double preprocessMs = 0.0;
+    double expandMs = 0.0;
     double totalMs = 0.0;
 };
 
@@ -177,6 +182,52 @@ struct GeometricRegionPartitionResult
     cv::Mat labels;
     std::vector<std::size_t> regionSizes;
     GeometricRegionPartitionStats stats;
+};
+
+struct GeometricRegionEvidenceStats
+{
+    int regionLabel = -1;
+    std::size_t regionPixels = 0;
+    std::size_t semanticProxyPixels = 0;
+    std::size_t semanticComparisonPixels = 0;
+    std::size_t semanticPositivePresencePixels = 0;
+    std::size_t semanticNegativePresencePixels = 0;
+    std::size_t semanticConsistentPresencePixels = 0;
+    std::size_t comparisonPixels = 0;
+    std::size_t positivePresencePixels = 0;
+    std::size_t negativePresencePixels = 0;
+    std::size_t consistentPresencePixels = 0;
+    std::size_t comparisonVotes = 0;
+    std::size_t positiveVotes = 0;
+    std::size_t negativeVotes = 0;
+    std::size_t consistentVotes = 0;
+    double semanticProxyRegionRatio = 0.0;
+    double semanticComparisonCoverage = 0.0;
+    double semanticPositiveComparedPixelRatio = 0.0;
+    double comparisonCoverage = 0.0;
+    double positiveComparedPixelRatio = 0.0;
+    double negativeComparedPixelRatio = 0.0;
+    double consistentComparedPixelRatio = 0.0;
+    double positiveVoteRatio = 0.0;
+    double negativeVoteRatio = 0.0;
+    double consistentVoteRatio = 0.0;
+};
+
+struct GeometricRegionEvidenceAggregationStats
+{
+    std::size_t regionCount = 0;
+    std::size_t regionsWithComparison = 0;
+    std::size_t regionsWithPositiveEvidence = 0;
+    std::size_t regionPixels = 0;
+    std::size_t comparisonPixels = 0;
+    std::size_t comparisonVotes = 0;
+    double totalMs = 0.0;
+};
+
+struct GeometricRegionEvidenceAggregationResult
+{
+    std::vector<GeometricRegionEvidenceStats> regions;
+    GeometricRegionEvidenceAggregationStats stats;
 };
 
 class GeometricDynamicDetector
@@ -233,6 +284,30 @@ public:
         const GeometricReferenceSamplingPolicy samplingPolicy =
             GeometricReferenceSamplingPolicy::Dense);
 
+    // G2-3R3 boundary-preserving depth-pyramid primitives and shadow
+    // evidence approximation. Expanded count cells are not independent
+    // full-resolution measurements and must not drive SLAM decisions.
+    static cv::Mat DownsampleDepthBoundaryAware(
+        const cv::Mat &depthMeters,
+        const int scale,
+        const float relativeThreshold,
+        const float absoluteThresholdMeters);
+
+    static cv::Mat ScaleCameraMatrix(
+        const cv::Mat &K,
+        const int scale);
+
+    static GeometricMultiReferenceResult
+        ComputePyramidMultiReferenceEvidence(
+            const std::vector<GeometricReferenceFrame> &references,
+            const cv::Mat &currentDepthMeters,
+            const cv::Mat &TcwCurrent,
+            const cv::Mat &K,
+            const float residualThresholdMeters,
+            const int scale,
+            const float relativeThreshold,
+            const float absoluteThresholdMeters);
+
     // G2-2R pure selection helper. Candidate frame ids must already be
     // ordered by the caller's reference policy. Missing cache entries remain
     // unavailable and are never replaced by a different reference.
@@ -250,6 +325,14 @@ public:
         const float relativeThreshold,
         const float absoluteThresholdMeters,
         const std::size_t smallRegionMaximumPixels = 64);
+
+    // G2-3R1 shadow-only aggregation. It records evidence distributions
+    // inside fixed regions and deliberately emits no dynamic decision.
+    static GeometricRegionEvidenceAggregationResult
+        AggregateMultiReferenceEvidenceByRegion(
+            const GeometricRegionPartitionResult &partition,
+            const GeometricMultiReferenceResult &evidence,
+            const cv::Mat &semanticProxyMask = cv::Mat());
 
 private:
     cv::Mat mK;

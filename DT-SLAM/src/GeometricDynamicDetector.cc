@@ -18,6 +18,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <opencv2/imgproc/imgproc.hpp>
+
 namespace ORB_SLAM2
 {
 
@@ -932,6 +934,12 @@ GeometricDynamicDetector::ComputeMultiReferenceEvidence(
         throw std::invalid_argument(
             "multi-reference residual threshold must be finite and positive");
     }
+    if(samplingPolicy==GeometricReferenceSamplingPolicy::PyramidDense)
+    {
+        throw std::invalid_argument(
+            "pyramid dense evidence requires "
+            "ComputePyramidMultiReferenceEvidence");
+    }
 
     GeometricMultiReferenceResult result;
     result.comparisonCount =
@@ -1069,6 +1077,243 @@ GeometricDynamicDetector::ComputeMultiReferenceEvidence(
     result.stats.totalMs =
         std::chrono::duration<double,std::milli>(
             totalEnd-totalStart).count();
+    return result;
+}
+
+cv::Mat GeometricDynamicDetector::DownsampleDepthBoundaryAware(
+    const cv::Mat &depthMeters,
+    const int scale,
+    const float relativeThreshold,
+    const float absoluteThresholdMeters)
+{
+    ValidateDepth(depthMeters,"pyramid depth");
+    if(scale<2)
+        throw std::invalid_argument("depth pyramid scale must be at least 2");
+    if(!std::isfinite(relativeThreshold) ||
+       relativeThreshold<0.0f ||
+       !std::isfinite(absoluteThresholdMeters) ||
+       absoluteThresholdMeters<=0.0f)
+    {
+        throw std::invalid_argument(
+            "depth pyramid thresholds must be finite and non-negative");
+    }
+
+    const int outputRows =
+        (depthMeters.rows+scale-1)/scale;
+    const int outputCols =
+        (depthMeters.cols+scale-1)/scale;
+    cv::Mat output =
+        cv::Mat::zeros(outputRows,outputCols,CV_32FC1);
+
+    for(int outputV=0; outputV<outputRows; ++outputV)
+    {
+        const int anchorV = outputV*scale;
+        float *outputRow = output.ptr<float>(outputV);
+        for(int outputU=0; outputU<outputCols; ++outputU)
+        {
+            const int anchorU = outputU*scale;
+            const float anchor =
+                depthMeters.at<float>(anchorV,anchorU);
+            if(!IsValidDepth(anchor))
+                continue;
+
+            const float threshold =
+                std::max(relativeThreshold*anchor,
+                         absoluteThresholdMeters);
+            double sum = 0.0;
+            std::size_t count = 0;
+            const int endV =
+                std::min(anchorV+scale,depthMeters.rows);
+            const int endU =
+                std::min(anchorU+scale,depthMeters.cols);
+            for(int v=anchorV; v<endV; ++v)
+            {
+                const float *depthRow =
+                    depthMeters.ptr<float>(v);
+                for(int u=anchorU; u<endU; ++u)
+                {
+                    const float depth = depthRow[u];
+                    if(IsValidDepth(depth) &&
+                       std::fabs(depth-anchor)<=threshold)
+                    {
+                        sum += depth;
+                        ++count;
+                    }
+                }
+            }
+            if(count>0)
+            {
+                outputRow[outputU] =
+                    static_cast<float>(
+                        sum/static_cast<double>(count));
+            }
+        }
+    }
+    return output;
+}
+
+cv::Mat GeometricDynamicDetector::ScaleCameraMatrix(
+    const cv::Mat &K,
+    const int scale)
+{
+    ValidateCameraMatrix(K);
+    if(scale<2)
+        throw std::invalid_argument("camera pyramid scale must be at least 2");
+
+    cv::Mat scaled = AsFloatMatrix(K).clone();
+    scaled.at<float>(0,0) /= static_cast<float>(scale);
+    scaled.at<float>(1,1) /= static_cast<float>(scale);
+    scaled.at<float>(0,2) /= static_cast<float>(scale);
+    scaled.at<float>(1,2) /= static_cast<float>(scale);
+    return scaled;
+}
+
+GeometricMultiReferenceResult
+GeometricDynamicDetector::ComputePyramidMultiReferenceEvidence(
+    const std::vector<GeometricReferenceFrame> &references,
+    const cv::Mat &currentDepthMeters,
+    const cv::Mat &TcwCurrent,
+    const cv::Mat &K,
+    const float residualThresholdMeters,
+    const int scale,
+    const float relativeThreshold,
+    const float absoluteThresholdMeters)
+{
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+
+    ValidateDepth(currentDepthMeters,"current pyramid depth");
+    ValidatePose(TcwCurrent,"current pyramid Tcw");
+    ValidateCameraMatrix(K);
+    if(references.empty())
+    {
+        throw std::invalid_argument(
+            "pyramid evidence requires at least one reference");
+    }
+
+    const std::chrono::steady_clock::time_point preprocessStart =
+        std::chrono::steady_clock::now();
+    const cv::Mat currentPyramid =
+        DownsampleDepthBoundaryAware(
+            currentDepthMeters,scale,relativeThreshold,
+            absoluteThresholdMeters);
+    const cv::Mat pyramidK =
+        ScaleCameraMatrix(K,scale);
+
+    std::vector<GeometricReferenceFrame> pyramidReferences;
+    pyramidReferences.reserve(references.size());
+    for(std::size_t index=0; index<references.size(); ++index)
+    {
+        const GeometricReferenceFrame &reference =
+            references[index];
+        ValidateDepth(
+            reference.depthMeters,
+            "full-resolution pyramid reference depth");
+        if(reference.depthMeters.size()!=
+           currentDepthMeters.size())
+        {
+            throw std::invalid_argument(
+                "pyramid reference and current depth sizes differ");
+        }
+
+        GeometricReferenceFrame pyramidReference = reference;
+        if(reference.pyramidDepthMeters.empty())
+        {
+            pyramidReference.depthMeters =
+                DownsampleDepthBoundaryAware(
+                    reference.depthMeters,scale,
+                    relativeThreshold,
+                    absoluteThresholdMeters);
+        }
+        else
+        {
+            ValidateDepth(
+                reference.pyramidDepthMeters,
+                "cached pyramid reference depth");
+            if(reference.pyramidDepthMeters.size()!=
+               currentPyramid.size())
+            {
+                throw std::invalid_argument(
+                    "cached pyramid reference has the wrong size");
+            }
+            pyramidReference.depthMeters =
+                reference.pyramidDepthMeters;
+        }
+        pyramidReferences.push_back(pyramidReference);
+    }
+    const std::chrono::steady_clock::time_point preprocessEnd =
+        std::chrono::steady_clock::now();
+
+    const GeometricMultiReferenceResult pyramid =
+        ComputeMultiReferenceEvidence(
+            pyramidReferences,currentPyramid,TcwCurrent,
+            pyramidK,residualThresholdMeters,
+            GeometricReferenceSamplingPolicy::Dense);
+
+    const std::chrono::steady_clock::time_point expandStart =
+        std::chrono::steady_clock::now();
+    GeometricMultiReferenceResult result;
+    cv::resize(
+        pyramid.comparisonCount,result.comparisonCount,
+        currentDepthMeters.size(),0.0,0.0,cv::INTER_NEAREST);
+    cv::resize(
+        pyramid.positiveCount,result.positiveCount,
+        currentDepthMeters.size(),0.0,0.0,cv::INTER_NEAREST);
+    cv::resize(
+        pyramid.negativeCount,result.negativeCount,
+        currentDepthMeters.size(),0.0,0.0,cv::INTER_NEAREST);
+    cv::resize(
+        pyramid.consistentCount,result.consistentCount,
+        currentDepthMeters.size(),0.0,0.0,cv::INTER_NEAREST);
+    result.perReference = pyramid.perReference;
+    result.stats.referenceCount = references.size();
+
+    for(int v=0; v<result.comparisonCount.rows; ++v)
+    {
+        const unsigned char *comparisonRow =
+            result.comparisonCount.ptr<unsigned char>(v);
+        const unsigned char *positiveRow =
+            result.positiveCount.ptr<unsigned char>(v);
+        const unsigned char *negativeRow =
+            result.negativeCount.ptr<unsigned char>(v);
+        const unsigned char *consistentRow =
+            result.consistentCount.ptr<unsigned char>(v);
+        for(int u=0; u<result.comparisonCount.cols; ++u)
+        {
+            const std::size_t comparisons = comparisonRow[u];
+            const std::size_t positives = positiveRow[u];
+            const std::size_t negatives = negativeRow[u];
+            const std::size_t consistent = consistentRow[u];
+            if(positives+negatives+consistent!=comparisons)
+            {
+                throw std::logic_error(
+                    "expanded pyramid evidence violates vote conservation");
+            }
+            if(comparisons>0)
+                ++result.stats.pixelsWithComparison;
+            if(positives>0)
+                ++result.stats.pixelsWithPositiveEvidence;
+            result.stats.totalComparisons += comparisons;
+            result.stats.totalPositiveVotes += positives;
+            result.stats.totalNegativeVotes += negatives;
+            result.stats.totalConsistentVotes += consistent;
+        }
+    }
+    const std::chrono::steady_clock::time_point expandEnd =
+        std::chrono::steady_clock::now();
+
+    result.stats.warpAndEvidenceMs =
+        pyramid.stats.warpAndEvidenceMs;
+    result.stats.aggregateMs = pyramid.stats.aggregateMs;
+    result.stats.preprocessMs =
+        std::chrono::duration<double,std::milli>(
+            preprocessEnd-preprocessStart).count();
+    result.stats.expandMs =
+        std::chrono::duration<double,std::milli>(
+            expandEnd-expandStart).count();
+    result.stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            expandEnd-totalStart).count();
     return result;
 }
 
@@ -1288,6 +1533,207 @@ GeometricDynamicDetector::PartitionDepthByDiscontinuity(
         result.stats.topFiveRegionValidRatio =
             static_cast<double>(
                 result.stats.topFiveRegionPixels)/valid;
+    }
+    result.stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-totalStart).count();
+    return result;
+}
+
+GeometricRegionEvidenceAggregationResult
+GeometricDynamicDetector::AggregateMultiReferenceEvidenceByRegion(
+    const GeometricRegionPartitionResult &partition,
+    const GeometricMultiReferenceResult &evidence,
+    const cv::Mat &semanticProxyMask)
+{
+    if(partition.labels.empty() ||
+       partition.labels.type()!=CV_32SC1)
+    {
+        throw std::invalid_argument(
+            "region evidence aggregation requires CV_32SC1 labels");
+    }
+    const cv::Size size = partition.labels.size();
+    const cv::Mat *countImages[4] = {
+        &evidence.comparisonCount,
+        &evidence.positiveCount,
+        &evidence.negativeCount,
+        &evidence.consistentCount
+    };
+    for(int imageIndex=0; imageIndex<4; ++imageIndex)
+    {
+        if(countImages[imageIndex]->empty() ||
+           countImages[imageIndex]->type()!=CV_8UC1 ||
+           countImages[imageIndex]->size()!=size)
+        {
+            throw std::invalid_argument(
+                "region evidence aggregation requires same-size CV_8UC1 count images");
+        }
+    }
+    if(!semanticProxyMask.empty() &&
+       (semanticProxyMask.type()!=CV_8UC1 ||
+        semanticProxyMask.size()!=size))
+    {
+        throw std::invalid_argument(
+            "semantic proxy must be empty or a same-size CV_8UC1 mask");
+    }
+
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+    GeometricRegionEvidenceAggregationResult result;
+    result.regions.resize(partition.regionSizes.size());
+    for(std::size_t regionIndex=0;
+        regionIndex<result.regions.size(); ++regionIndex)
+    {
+        result.regions[regionIndex].regionLabel =
+            static_cast<int>(regionIndex);
+    }
+
+    const bool hasSemanticProxy = !semanticProxyMask.empty();
+    for(int v=0; v<size.height; ++v)
+    {
+        const int *labelRow = partition.labels.ptr<int>(v);
+        const unsigned char *comparisonRow =
+            evidence.comparisonCount.ptr<unsigned char>(v);
+        const unsigned char *positiveRow =
+            evidence.positiveCount.ptr<unsigned char>(v);
+        const unsigned char *negativeRow =
+            evidence.negativeCount.ptr<unsigned char>(v);
+        const unsigned char *consistentRow =
+            evidence.consistentCount.ptr<unsigned char>(v);
+        const unsigned char *semanticRow =
+            hasSemanticProxy
+                ? semanticProxyMask.ptr<unsigned char>(v)
+                : static_cast<const unsigned char*>(NULL);
+        for(int u=0; u<size.width; ++u)
+        {
+            const int label = labelRow[u];
+            if(label<0)
+                continue;
+            if(static_cast<std::size_t>(label)>=
+               result.regions.size())
+            {
+                throw std::logic_error(
+                    "region label is outside regionSizes");
+            }
+
+            const std::size_t comparisons = comparisonRow[u];
+            const std::size_t positives = positiveRow[u];
+            const std::size_t negatives = negativeRow[u];
+            const std::size_t consistent = consistentRow[u];
+            if(positives+negatives+consistent!=comparisons)
+            {
+                throw std::logic_error(
+                    "region evidence votes do not partition comparisons");
+            }
+
+            GeometricRegionEvidenceStats &region =
+                result.regions[static_cast<std::size_t>(label)];
+            ++region.regionPixels;
+            ++result.stats.regionPixels;
+            const bool isSemanticProxy =
+                semanticRow && semanticRow[u]!=0;
+            if(isSemanticProxy)
+                ++region.semanticProxyPixels;
+            if(comparisons==0)
+                continue;
+
+            ++region.comparisonPixels;
+            ++result.stats.comparisonPixels;
+            if(isSemanticProxy)
+                ++region.semanticComparisonPixels;
+            region.comparisonVotes += comparisons;
+            region.positiveVotes += positives;
+            region.negativeVotes += negatives;
+            region.consistentVotes += consistent;
+            result.stats.comparisonVotes += comparisons;
+            if(positives>0)
+            {
+                ++region.positivePresencePixels;
+                if(isSemanticProxy)
+                    ++region.semanticPositivePresencePixels;
+            }
+            if(negatives>0)
+            {
+                ++region.negativePresencePixels;
+                if(isSemanticProxy)
+                    ++region.semanticNegativePresencePixels;
+            }
+            if(consistent>0)
+            {
+                ++region.consistentPresencePixels;
+                if(isSemanticProxy)
+                    ++region.semanticConsistentPresencePixels;
+            }
+        }
+    }
+
+    result.stats.regionCount = result.regions.size();
+    for(std::size_t regionIndex=0;
+        regionIndex<result.regions.size(); ++regionIndex)
+    {
+        GeometricRegionEvidenceStats &region =
+            result.regions[regionIndex];
+        if(region.regionPixels!=partition.regionSizes[regionIndex])
+        {
+            throw std::logic_error(
+                "region evidence pixels disagree with partition sizes");
+        }
+        if(region.comparisonPixels>0)
+            ++result.stats.regionsWithComparison;
+        if(region.positivePresencePixels>0)
+            ++result.stats.regionsWithPositiveEvidence;
+        if(region.regionPixels>0)
+        {
+            const double pixels =
+                static_cast<double>(region.regionPixels);
+            region.semanticProxyRegionRatio =
+                static_cast<double>(
+                    region.semanticProxyPixels)/pixels;
+            region.comparisonCoverage =
+                static_cast<double>(
+                    region.comparisonPixels)/pixels;
+        }
+        if(region.semanticProxyPixels>0)
+        {
+            region.semanticComparisonCoverage =
+                static_cast<double>(
+                    region.semanticComparisonPixels)/
+                static_cast<double>(
+                    region.semanticProxyPixels);
+        }
+        if(region.semanticComparisonPixels>0)
+        {
+            region.semanticPositiveComparedPixelRatio =
+                static_cast<double>(
+                    region.semanticPositivePresencePixels)/
+                static_cast<double>(
+                    region.semanticComparisonPixels);
+        }
+        if(region.comparisonPixels>0)
+        {
+            const double compared =
+                static_cast<double>(region.comparisonPixels);
+            region.positiveComparedPixelRatio =
+                static_cast<double>(
+                    region.positivePresencePixels)/compared;
+            region.negativeComparedPixelRatio =
+                static_cast<double>(
+                    region.negativePresencePixels)/compared;
+            region.consistentComparedPixelRatio =
+                static_cast<double>(
+                    region.consistentPresencePixels)/compared;
+        }
+        if(region.comparisonVotes>0)
+        {
+            const double votes =
+                static_cast<double>(region.comparisonVotes);
+            region.positiveVoteRatio =
+                static_cast<double>(region.positiveVotes)/votes;
+            region.negativeVoteRatio =
+                static_cast<double>(region.negativeVotes)/votes;
+            region.consistentVoteRatio =
+                static_cast<double>(region.consistentVotes)/votes;
+        }
     }
     result.stats.totalMs =
         std::chrono::duration<double,std::milli>(
