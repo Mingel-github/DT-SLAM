@@ -24,6 +24,17 @@ def read_timestamp_file(path):
     return entries
 
 
+def keep_existing_files(entries, dataset_root):
+    kept = []
+    missing = []
+    for entry in entries:
+        if (dataset_root / entry[2]).is_file():
+            kept.append(entry)
+        else:
+            missing.append(entry)
+    return kept, missing
+
+
 def associate_one_to_one(rgb_entries, depth_entries, max_difference_seconds):
     candidates = []
     for rgb_index, rgb in enumerate(rgb_entries):
@@ -53,6 +64,14 @@ def main():
     parser.add_argument("depth_list", type=pathlib.Path)
     parser.add_argument("output", type=pathlib.Path)
     parser.add_argument("--max-difference-ms", type=float, default=20.0)
+    parser.add_argument(
+        "--dataset-root",
+        type=pathlib.Path,
+        help=(
+            "filter timestamp entries whose referenced files do not exist "
+            "under this dataset directory"
+        ),
+    )
     args = parser.parse_args()
 
     if args.max_difference_ms <= 0.0:
@@ -64,6 +83,21 @@ def main():
 
     rgb_entries = read_timestamp_file(args.rgb_list)
     depth_entries = read_timestamp_file(args.depth_list)
+    missing_rgb = []
+    missing_depth = []
+    if args.dataset_root is not None:
+        rgb_entries, missing_rgb = keep_existing_files(
+            rgb_entries, args.dataset_root
+        )
+        depth_entries, missing_depth = keep_existing_files(
+            depth_entries, args.dataset_root
+        )
+        if not rgb_entries or not depth_entries:
+            raise ValueError(
+                "no existing RGB/depth files remain under {}".format(
+                    args.dataset_root
+                )
+            )
     matches = associate_one_to_one(
         rgb_entries, depth_entries, args.max_difference_ms / 1000.0
     )
@@ -77,6 +111,13 @@ def main():
                 args.max_difference_ms
             )
         )
+        if args.dataset_root is not None:
+            stream.write(
+                "# existing-file filter root={}; missing_rgb={}; "
+                "missing_depth={}\n".format(
+                    args.dataset_root, len(missing_rgb), len(missing_depth)
+                )
+            )
         for rgb_index, depth_index, _ in matches:
             rgb = rgb_entries[rgb_index]
             depth = depth_entries[depth_index]
@@ -87,11 +128,13 @@ def main():
     max_difference_ms = max(match[2] for match in matches) * 1000.0
     print(
         "wrote {} pairs to {}; unmatched_rgb={}; unmatched_depth={}; "
-        "max_abs_delta_ms={:.6f}".format(
+        "missing_rgb={}; missing_depth={}; max_abs_delta_ms={:.6f}".format(
             len(matches),
             args.output,
             len(rgb_entries) - len(matches),
             len(depth_entries) - len(matches),
+            len(missing_rgb),
+            len(missing_depth),
             max_difference_ms,
         )
     )

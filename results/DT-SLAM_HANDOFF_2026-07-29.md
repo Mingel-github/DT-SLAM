@@ -165,7 +165,8 @@ results/g2_3r4_2026-07-29/
 | G2-3R1 | 固定区域证据聚合 | 已完成 shadow 审计，不设动态阈值 |
 | G2-3R2 | full-dense 对 grid 的覆盖上界审计 | 已完成，确认 grid coverage 是瓶颈 |
 | G2-3R3 | scale-2 深度金字塔 dense evidence | 已完成，覆盖通过、实时性未通过 |
-| G2-3R4 | scale-2 低分辨率区域近似 | 文献审计完成、SPEC 待评审、实现未开始 |
+| G2-3R4 | scale-2 低分辨率区域近似 | 最小实现/测试完成；端到端收益门失败，路线停止 |
+| G2-4 | 动态/静态区分能力与风险代理 | G2-4A 初步审计和风险字段接入完成；下一步为 Bonn 坐标域审计 |
 | G1-F | 几何特征真正参与 tracking/filtering | 未放行 |
 | G1-D | 几何区域真正过滤深度或稠密写图 | 未放行 |
 
@@ -359,7 +360,7 @@ export LD_LIBRARY_PATH="/home/zhu/dynaslam_ws/pangolin_install/lib:/home/zhu/dyn
 
 ---
 
-## 8. 下一步：G2-3R4，而不是直接进入过滤
+## 8. G2-3R4 结果与下一步
 
 当前建议的下一步是：
 
@@ -426,8 +427,54 @@ SPEC 已明确：
 - 增加 PoseOptimization；
 - 宣称 ATE 改善。
 
-G2-3R4 即使通过也不直接解锁 G1-F。必须先完成可靠动态/静态区分门控、未知动态
-物体验证和独立数据上的判决参数冻结。G1-D 还必须等待像素区域 mask 的独立验收。
+G2-3R4 最小实现和 candidate-only 计时已经完成。candidate region 独立成本门
+通过，但端到端改善仅为 `1.600/0.287/1.403 ms`，三个序列中两个未达到预冻结
+的 `1.5 ms`，因此 bounded benefit overall 失败。按停止条件不再扩展 paired
+structure audit，也不继续 CPU 微调；所有未测结构指标保持未知。
+
+详细结果：
+
+```text
+results/g2_3r4_2026-07-29/G2_3R4_LOW_RESOLUTION_REGION_APPROXIMATION_SHADOW_RESULT.md
+```
+
+G2-3R4 不解锁 G1-F。G2-4A 已用 G2-3R3 region CSV 做初步只读区分审计：
+walking 有条件 person-proxy 信号，但 proxy AUC 仅 `0.557`；sitting proxy
+AUC 为 `0.444`，不支持通用 person-score 规则；fr1/xyz 显示小区域和低支持量
+产生大量极端 score。当前不选择动态阈值。
+
+G2-4 文档：
+
+```text
+results/g2_4_2026-07-29/G2_4_DYNAMIC_STATIC_SEPARABILITY_LITERATURE_AUDIT.md
+results/g2_4_2026-07-29/G2_4_DYNAMIC_STATIC_SEPARABILITY_SHADOW_SPEC.md
+results/g2_4_2026-07-29/G2_4_PRELIMINARY_SEPARABILITY_RISK_AUDIT_RESULT.md
+results/g2_4_2026-07-29/g2_4_preliminary_separability_audit.json
+results/g2_4_2026-07-29/G2_4A_RISK_INSTRUMENTATION_RESULT.md
+results/g2_4_2026-07-29/G2_4_BONN_STATIC_MOVING_BOX_EVALUATION_PROTOCOL.md
+results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_AUDIT_AND_SPEC.md
+results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_RESULT.md
+```
+
+boundary、invalid-depth 和 reference-support instrumentation 已完成且默认
+关闭。最终 pose-quality 没有接入，因为 geometry 当前在 `TrackLocalMap()`
+之前运行。
+
+Bonn坐标域只读审计已完成。当前feature depth在raw `mvKeys`位置读取，真正冲突
+是geometry warp用无畸变针孔模型解释Bonn的非零畸变raw depth pixel。已冻结
+最小候选为：RGB线性rectification、depth最近邻rectification、YOLO/ORB/
+geometry全部使用`P=official K`的统一域，并将tracking distortion设为零。
+本地两份box archive的`depth.txt`还分别引用4个和3个不存在的PNG，association
+必须过滤。
+
+默认关闭的Bonn联合输入rectification已经实现。确定性测试、TUM旁路和Bonn
+150帧RGB/depth/ORB/geometry shadow通过；rectification mean为`0.631 ms`，
+2107条region CSV invariant无违反。host GPU的30帧online YOLO也通过，
+mask ready为`30/30`且age median/max为`0/0`。完整坐标域门通过。
+
+下一小步是不修改YOLO代码地自动选帧并审计box semantic coverage；不是动态
+阈值。
+G1-D 仍必须等待像素区域 mask 的独立验收。
 
 ---
 
@@ -453,6 +500,14 @@ G2-3R4 即使通过也不直接解锁 G1-F。必须先完成可靠动态/静态�
    results/g2_3r3_2026-07-29/G2_3R3_PYRAMID_DENSE_EVIDENCE_SHADOW_RESULT.md
    results/g2_3r4_2026-07-29/G2_3R4_LOW_RESOLUTION_REGION_LITERATURE_AUDIT.md
    results/g2_3r4_2026-07-29/G2_3R4_LOW_RESOLUTION_REGION_APPROXIMATION_SHADOW_SPEC.md
+   results/g2_3r4_2026-07-29/G2_3R4_LOW_RESOLUTION_REGION_APPROXIMATION_SHADOW_RESULT.md
+   results/g2_4_2026-07-29/G2_4_DYNAMIC_STATIC_SEPARABILITY_LITERATURE_AUDIT.md
+   results/g2_4_2026-07-29/G2_4_DYNAMIC_STATIC_SEPARABILITY_SHADOW_SPEC.md
+   results/g2_4_2026-07-29/G2_4_PRELIMINARY_SEPARABILITY_RISK_AUDIT_RESULT.md
+   results/g2_4_2026-07-29/G2_4A_RISK_INSTRUMENTATION_RESULT.md
+   results/g2_4_2026-07-29/G2_4_BONN_STATIC_MOVING_BOX_EVALUATION_PROTOCOL.md
+   results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_AUDIT_AND_SPEC.md
+   results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_RESULT.md
    results/ate_semantic_baseline_2026-07-29/REPORT.md
    ```
 
@@ -463,7 +518,10 @@ G2-3R4 即使通过也不直接解锁 G1-F。必须先完成可靠动态/静态�
    - 当前未提交状态；
    - 下一小步；
    - 明确不会做的越界修改；
-7. 得到继续指令后，先评审 G2-3R4 SPEC；评审通过才开始最小 shadow 实现。
+7. 阅读 G2-3R4 RESULT，确认收益门失败及结构指标未测；
+8. 阅读 G2-4 初步结果、风险字段结果和 G2-4B SPEC/RESULT；下一轮只做
+   Bonn自动选帧与box semantic coverage审计，不选择动态阈值，也不继续
+   G2-3R4性能优化。
 
 ---
 
@@ -497,7 +555,10 @@ G2-3R4 即使通过也不直接解锁 G1-F。必须先完成可靠动态/静态�
 - 稀疏 ORB/grid sampling 的覆盖不足；
 - full dense 覆盖足够但成本过高；
 - scale-2 pyramid dense evidence 已解决大部分覆盖/成本矛盾，但整体仍约 24–25 FPS；
-- 当前最小、合理且有证据支撑的下一步是评审 G2-3R4 SPEC，之后才进行低分辨率区域表示审计实现；
+- G2-3R4 已因端到端收益门失败停止；
+- G2-4A 已确认现有 proxy 信号不足以直接形成通用判决；
+- G2-4B 已完成 Bonn 联合 rectification，RGB/depth/ORB/online mask/geometry
+  坐标域门通过；
 - 几何尚未进入真正的 SLAM 过滤，因此现在不测“几何 ATE 改善”，只保留语义基线 ATE/FPS 作为冻结对照。
 
 这份交接的目的不是让新会话“相信摘要”，而是让它知道去哪里核查、哪些结论已经冻结、哪些结果仍是假设，以及下一步只能改动什么。

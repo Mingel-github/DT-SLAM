@@ -89,6 +89,7 @@ src/Viewer.cc
 src/YOLOSegment.cc
 src/GeometricDynamicDetector.cc
 src/JiGeometryBaseline.cc
+src/RGBDInputRectifier.cc
 )
 
 find_package(Threads REQUIRED)

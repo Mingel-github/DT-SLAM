@@ -151,12 +151,25 @@ struct GeometricMultiReferenceResult
     cv::Mat positiveCount;
     cv::Mat negativeCount;
     cv::Mat consistentCount;
+
+    // G2-3R4 native pyramid-domain state. These fields are populated only
+    // by ComputePyramidMultiReferenceEvidence. Each native count cell is one
+    // measurement; the expanded full-resolution images above are only a
+    // coordinate-domain compatibility view.
+    cv::Mat nativeDepthMeters;
+    cv::Mat nativeComparisonCount;
+    cv::Mat nativePositiveCount;
+    cv::Mat nativeNegativeCount;
+    cv::Mat nativeConsistentCount;
+    int nativeScale = 1;
+
     std::vector<GeometricPerReferenceStats> perReference;
     GeometricMultiReferenceStats stats;
 };
 
 struct GeometricRegionPartitionStats
 {
+    int domainScale = 1;
     std::size_t validDepthPixels = 0;
     std::size_t boundaryPixels = 0;
     std::size_t assignedRegionPixels = 0;
@@ -170,6 +183,8 @@ struct GeometricRegionPartitionStats
     double largestRegionValidRatio = 0.0;
     double topFiveRegionValidRatio = 0.0;
     double totalMs = 0.0;
+    double mappingMs = 0.0;
+    double onlineTotalMs = 0.0;
 };
 
 struct GeometricRegionPartitionResult
@@ -182,6 +197,15 @@ struct GeometricRegionPartitionResult
     cv::Mat labels;
     std::vector<std::size_t> regionSizes;
     GeometricRegionPartitionStats stats;
+};
+
+struct GeometricRegionRiskBandStats
+{
+    std::size_t regionPixels = 0;
+    std::size_t comparisonPixels = 0;
+    std::size_t positivePresencePixels = 0;
+    std::size_t comparisonVotes = 0;
+    std::size_t positiveVotes = 0;
 };
 
 struct GeometricRegionEvidenceStats
@@ -201,6 +225,15 @@ struct GeometricRegionEvidenceStats
     std::size_t positiveVotes = 0;
     std::size_t negativeVotes = 0;
     std::size_t consistentVotes = 0;
+    std::size_t singleReferenceComparisonPixels = 0;
+    std::size_t multiReferenceComparisonPixels = 0;
+    std::size_t singleReferencePositivePresencePixels = 0;
+    std::size_t multiReferencePositivePresencePixels = 0;
+    std::size_t unanimousPositivePixels = 0;
+    GeometricRegionRiskBandStats boundaryWithinOnePixel;
+    GeometricRegionRiskBandStats boundaryWithinTwoPixels;
+    GeometricRegionRiskBandStats invalidWithinOnePixel;
+    GeometricRegionRiskBandStats invalidWithinTwoPixels;
     double semanticProxyRegionRatio = 0.0;
     double semanticComparisonCoverage = 0.0;
     double semanticPositiveComparedPixelRatio = 0.0;
@@ -297,6 +330,13 @@ public:
         const cv::Mat &K,
         const int scale);
 
+    // G2-3R4 semantic proxy projection into the native pyramid-cell domain.
+    // A cell is non-zero when any source pixel in its scale-by-scale block is
+    // non-zero. This is diagnostic-only and is not a dynamic decision.
+    static cv::Mat DownsampleMaskAny(
+        const cv::Mat &mask,
+        const int scale);
+
     static GeometricMultiReferenceResult
         ComputePyramidMultiReferenceEvidence(
             const std::vector<GeometricReferenceFrame> &references,
@@ -332,7 +372,8 @@ public:
         AggregateMultiReferenceEvidenceByRegion(
             const GeometricRegionPartitionResult &partition,
             const GeometricMultiReferenceResult &evidence,
-            const cv::Mat &semanticProxyMask = cv::Mat());
+            const cv::Mat &semanticProxyMask = cv::Mat(),
+            const bool collectRiskDiagnostics = false);
 
 private:
     cv::Mat mK;

@@ -1,10 +1,13 @@
 #include <cmath>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 
 #include <opencv2/core/core.hpp>
+#include <opencv2/calib3d/calib3d.hpp>
 
 #include "GeometricDynamicDetector.h"
+#include "RGBDInputRectifier.h"
 
 namespace
 {
@@ -18,6 +21,165 @@ void Require(const bool condition, const char *message)
 cv::Mat IdentityPose()
 {
     return cv::Mat::eye(4,4,CV_32F);
+}
+
+cv::FileStorage RectificationSettings(
+    const double cameraK1 = 0.0,
+    const bool enabled = true)
+{
+    std::ostringstream yaml;
+    yaml << "%YAML:1.0\n"
+         << "RGBD.InputRectification.Enable: " << (enabled ? 1 : 0) << "\n"
+         << "RGBD.InputRectification.fx: 542.822841\n"
+         << "RGBD.InputRectification.fy: 542.576870\n"
+         << "RGBD.InputRectification.cx: 315.593520\n"
+         << "RGBD.InputRectification.cy: 237.756098\n"
+         << "RGBD.InputRectification.k1: 0.039903\n"
+         << "RGBD.InputRectification.k2: -0.099343\n"
+         << "RGBD.InputRectification.p1: -0.000730\n"
+         << "RGBD.InputRectification.p2: -0.000144\n"
+         << "RGBD.InputRectification.k3: 0.000000\n"
+         << "Camera.fx: 542.822841\n"
+         << "Camera.fy: 542.576870\n"
+         << "Camera.cx: 315.593520\n"
+         << "Camera.cy: 237.756098\n"
+         << "Camera.k1: " << cameraK1 << "\n"
+         << "Camera.k2: 0.0\n"
+         << "Camera.p1: 0.0\n"
+         << "Camera.p2: 0.0\n"
+         << "Camera.k3: 0.0\n";
+    return cv::FileStorage(
+        yaml.str(),cv::FileStorage::READ | cv::FileStorage::MEMORY);
+}
+
+void TestRGBDRectificationDisabledBypass()
+{
+    cv::FileStorage settings = RectificationSettings(0.0,false);
+    ORB_SLAM2::RGBDInputRectifier rectifier;
+    rectifier.Configure(settings);
+
+    cv::Mat rgb(4,6,CV_8UC3,cv::Scalar(1,2,3));
+    cv::Mat depth(4,6,CV_16UC1,cv::Scalar(1000));
+    cv::Mat outputRGB;
+    cv::Mat outputDepth;
+    rectifier.RectifyRGBD(rgb,depth,outputRGB,outputDepth);
+
+    Require(!rectifier.IsEnabled(),
+            "RGB-D input rectification must be disabled by default");
+    Require(outputRGB.data==rgb.data && outputDepth.data==depth.data,
+            "disabled RGB-D rectification must bypass input without resampling");
+}
+
+void TestRGBDRectificationDepthUsesNearestNeighbor()
+{
+    cv::FileStorage settings = RectificationSettings();
+    ORB_SLAM2::RGBDInputRectifier rectifier;
+    rectifier.Configure(settings);
+
+    cv::Mat rgb(480,640,CV_8UC3,cv::Scalar(20,40,60));
+    cv::Mat depth(480,640,CV_16UC1);
+    for(int row=0; row<depth.rows; ++row)
+    {
+        unsigned short *depthRow = depth.ptr<unsigned short>(row);
+        for(int col=0; col<depth.cols; ++col)
+            depthRow[col] = col<320 ? 1000 : 2000;
+    }
+
+    cv::Mat outputRGB;
+    cv::Mat outputDepth;
+    rectifier.RectifyRGBD(rgb,depth,outputRGB,outputDepth);
+
+    Require(rectifier.IsEnabled() &&
+            rectifier.DomainName()=="undistorted_pinhole",
+            "enabled RGB-D rectification must declare the pinhole domain");
+    Require(outputRGB.size()==rgb.size() && outputRGB.type()==rgb.type() &&
+            outputDepth.size()==depth.size() &&
+            outputDepth.type()==depth.type(),
+            "RGB-D rectification must preserve size and image types");
+    for(int row=0; row<outputDepth.rows; ++row)
+    {
+        const unsigned short *depthRow =
+            outputDepth.ptr<unsigned short>(row);
+        for(int col=0; col<outputDepth.cols; ++col)
+        {
+            Require(depthRow[col]==0 ||
+                    depthRow[col]==1000 ||
+                    depthRow[col]==2000,
+                    "depth rectification introduced an interpolated depth value");
+        }
+    }
+}
+
+void TestRGBDRectificationRejectsDoubleUndistortion()
+{
+    cv::FileStorage settings = RectificationSettings(0.01,true);
+    ORB_SLAM2::RGBDInputRectifier rectifier;
+    bool rejected = false;
+    try
+    {
+        rectifier.Configure(settings);
+    }
+    catch(const std::invalid_argument &)
+    {
+        rejected = true;
+    }
+    Require(rejected,
+            "rectified RGB-D input must reject non-zero tracking distortion");
+}
+
+void TestBonnCalibrationRoundTrip()
+{
+    const cv::Mat K = (cv::Mat_<double>(3,3) <<
+        542.822841,0.0,315.593520,
+        0.0,542.576870,237.756098,
+        0.0,0.0,1.0);
+    const cv::Mat distortion = (cv::Mat_<double>(5,1) <<
+        0.039903,-0.099343,-0.000730,-0.000144,0.0);
+
+    std::vector<cv::Point2d> rawPoints;
+    for(int row=0; row<=48; ++row)
+    {
+        for(int col=0; col<=64; ++col)
+        {
+            rawPoints.push_back(cv::Point2d(
+                639.0*col/64.0,479.0*row/48.0));
+        }
+    }
+    std::vector<cv::Point2d> rectifiedPoints;
+    cv::undistortPoints(
+        rawPoints,rectifiedPoints,K,distortion,cv::Mat(),K);
+
+    double maxRoundTripError = 0.0;
+    for(std::size_t index=0; index<rectifiedPoints.size(); ++index)
+    {
+        const double x =
+            (rectifiedPoints[index].x-K.at<double>(0,2))/
+            K.at<double>(0,0);
+        const double y =
+            (rectifiedPoints[index].y-K.at<double>(1,2))/
+            K.at<double>(1,1);
+        const double r2 = x*x+y*y;
+        const double radial =
+            1.0+distortion.at<double>(0)*r2+
+            distortion.at<double>(1)*r2*r2+
+            distortion.at<double>(4)*r2*r2*r2;
+        const double xd =
+            x*radial+
+            2.0*distortion.at<double>(2)*x*y+
+            distortion.at<double>(3)*(r2+2.0*x*x);
+        const double yd =
+            y*radial+
+            distortion.at<double>(2)*(r2+2.0*y*y)+
+            2.0*distortion.at<double>(3)*x*y;
+        const cv::Point2d reconstructed(
+            K.at<double>(0,0)*xd+K.at<double>(0,2),
+            K.at<double>(1,1)*yd+K.at<double>(1,2));
+        maxRoundTripError = std::max(
+            maxRoundTripError,
+            cv::norm(reconstructed-rawPoints[index]));
+    }
+    Require(maxRoundTripError<=0.05,
+            "Bonn raw/undistorted calibration round-trip exceeds 0.05 px");
 }
 
 void TestIdentityPlane()
@@ -565,6 +727,14 @@ void TestPyramidDepthAndEvidence()
     Require(evidence.comparisonCount.size()==depth.size() &&
             evidence.positiveCount.size()==depth.size(),
             "expanded pyramid evidence has the wrong size");
+    Require(evidence.nativeScale==2 &&
+            evidence.nativeDepthMeters.size()==pyramid.size() &&
+            evidence.nativeComparisonCount.size()==pyramid.size() &&
+            evidence.nativePositiveCount.size()==pyramid.size(),
+            "native pyramid evidence state has the wrong domain");
+    Require(cv::sum(evidence.nativeComparisonCount)[0]==3.0 &&
+            cv::sum(evidence.nativeConsistentCount)[0]==3.0,
+            "native pyramid cells must be counted once");
     Require(evidence.stats.pixelsWithComparison==12 &&
             evidence.stats.totalComparisons==12 &&
             evidence.stats.pixelsWithPositiveEvidence==0 &&
@@ -572,6 +742,65 @@ void TestPyramidDepthAndEvidence()
             evidence.stats.totalNegativeVotes==0 &&
             evidence.stats.totalConsistentVotes==12,
             "identity pyramid evidence counts are incorrect");
+}
+
+void TestLowResolutionRegionUsesNativeCells()
+{
+    const cv::Mat depth(4,4,CV_32FC1,cv::Scalar(2.0f));
+    cv::Mat K = cv::Mat::eye(3,3,CV_32F);
+    K.at<float>(0,0) = 100.0f;
+    K.at<float>(1,1) = 100.0f;
+    K.at<float>(0,2) = 1.5f;
+    K.at<float>(1,2) = 1.5f;
+
+    ORB_SLAM2::GeometricReferenceFrame reference;
+    reference.depthMeters = depth;
+    reference.Tcw = IdentityPose();
+    std::vector<ORB_SLAM2::GeometricReferenceFrame> references(
+        1,reference);
+    const ORB_SLAM2::GeometricMultiReferenceResult evidence =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputePyramidMultiReferenceEvidence(
+                references,depth,IdentityPose(),K,
+                0.10f,2,0.025f,0.08f);
+
+    const ORB_SLAM2::GeometricRegionPartitionResult partition =
+        ORB_SLAM2::GeometricDynamicDetector::
+            PartitionDepthByDiscontinuity(
+                evidence.nativeDepthMeters,0.025f,0.08f);
+    ORB_SLAM2::GeometricMultiReferenceResult nativeEvidence;
+    nativeEvidence.comparisonCount =
+        evidence.nativeComparisonCount;
+    nativeEvidence.positiveCount =
+        evidence.nativePositiveCount;
+    nativeEvidence.negativeCount =
+        evidence.nativeNegativeCount;
+    nativeEvidence.consistentCount =
+        evidence.nativeConsistentCount;
+
+    cv::Mat fullMask = cv::Mat::zeros(4,4,CV_8UC1);
+    fullMask.at<unsigned char>(1,1) = 255;
+    fullMask.at<unsigned char>(3,2) = 255;
+    const cv::Mat nativeMask =
+        ORB_SLAM2::GeometricDynamicDetector::
+            DownsampleMaskAny(fullMask,2);
+    const ORB_SLAM2::GeometricRegionEvidenceAggregationResult
+        aggregation =
+            ORB_SLAM2::GeometricDynamicDetector::
+                AggregateMultiReferenceEvidenceByRegion(
+                    partition,nativeEvidence,nativeMask);
+
+    Require(partition.stats.regionCount==1 &&
+            partition.regionSizes[0]==4,
+            "uniform half-resolution depth must remain one region");
+    Require(nativeMask.rows==2 && nativeMask.cols==2 &&
+            cv::countNonZero(nativeMask)==2,
+            "semantic proxy must use block-any half-cell projection");
+    Require(aggregation.stats.regionPixels==4 &&
+            aggregation.stats.comparisonPixels==4 &&
+            aggregation.stats.comparisonVotes==4,
+            "G2-3R4 aggregation must count four native cells, not "
+            "sixteen expanded pixels");
 }
 
 void TestRegionEvidenceAggregation()
@@ -611,7 +840,7 @@ void TestRegionEvidenceAggregation()
     const ORB_SLAM2::GeometricRegionEvidenceAggregationResult result =
         ORB_SLAM2::GeometricDynamicDetector::
             AggregateMultiReferenceEvidenceByRegion(
-                partition,evidence,semantic);
+                partition,evidence,semantic,true);
 
     Require(result.regions.size()==2 &&
             result.stats.regionPixels==6 &&
@@ -634,6 +863,18 @@ void TestRegionEvidenceAggregation()
             first.negativeVotes==1 &&
             first.consistentVotes==2,
             "first-region vote sums are incorrect");
+    Require(first.singleReferenceComparisonPixels==2 &&
+            first.multiReferenceComparisonPixels==1 &&
+            first.singleReferencePositivePresencePixels==0 &&
+            first.multiReferencePositivePresencePixels==1 &&
+            first.unanimousPositivePixels==0,
+            "first-region reference-support diagnostics are incorrect");
+    Require(first.boundaryWithinOnePixel.regionPixels==2 &&
+            first.boundaryWithinTwoPixels.regionPixels==4 &&
+            first.boundaryWithinTwoPixels.positiveVotes==1 &&
+            first.invalidWithinOnePixel.regionPixels==2 &&
+            first.invalidWithinTwoPixels.regionPixels==4,
+            "first-region boundary/invalid risk bands are incorrect");
     Require(std::abs(first.comparisonCoverage-0.75)<1e-9 &&
             std::abs(first.positiveVoteRatio-0.25)<1e-9,
             "first-region evidence ratios are incorrect");
@@ -646,6 +887,14 @@ void TestRegionEvidenceAggregation()
             second.comparisonPixels==1 &&
             second.positivePresencePixels==1,
             "second-region evidence aggregation is incorrect");
+    Require(second.singleReferenceComparisonPixels==1 &&
+            second.singleReferencePositivePresencePixels==1 &&
+            second.unanimousPositivePixels==1 &&
+            second.boundaryWithinOnePixel.regionPixels==2 &&
+            second.boundaryWithinOnePixel.positiveVotes==1 &&
+            second.invalidWithinOnePixel.regionPixels==2 &&
+            second.invalidWithinOnePixel.positiveVotes==1,
+            "second-region risk diagnostics are incorrect");
     Require(result.stats.regionsWithComparison==2 &&
             result.stats.regionsWithPositiveEvidence==2,
             "region evidence aggregate region counts are incorrect");
@@ -658,6 +907,10 @@ int main()
     try
     {
         TestIdentityPlane();
+        TestRGBDRectificationDisabledBypass();
+        TestRGBDRectificationDepthUsesNearestNeighbor();
+        TestRGBDRectificationRejectsDoubleUndistortion();
+        TestBonnCalibrationRoundTrip();
         TestSignedNearSurface();
         TestSignedFarSurface();
         TestTcwDirection();
@@ -674,16 +927,17 @@ int main()
         TestDepthBoundaryPartitionPreservesUnknown();
         TestDepthBoundaryPartitionKeepsPlane();
         TestPyramidDepthAndEvidence();
+        TestLowResolutionRegionUsesNativeCells();
         TestRegionEvidenceAggregation();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3 Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3 Test] PASS"
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B Test] PASS"
               << std::endl;
     return 0;
 }

@@ -34,6 +34,7 @@
 #include<Eigen/Geometry>
 
 #include<System.h>
+#include<RGBDInputRectifier.h>
 #include<YOLOSegment.h>
 
 using namespace std;
@@ -109,6 +110,22 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    ORB_SLAM2::RGBDInputRectifier inputRectifier;
+    try
+    {
+        cv::FileStorage settings(argv[2],cv::FileStorage::READ);
+        if(!settings.isOpened())
+            throw std::runtime_error("Failed to open settings for RGB-D input");
+        inputRectifier.Configure(settings);
+    }
+    catch(const std::exception &error)
+    {
+        cerr << "[RGBD Input] Configuration failed: "
+             << error.what() << endl;
+        return 1;
+    }
+    cout << "[RGBD Input] " << inputRectifier.DomainSignature() << endl;
+
     vector<cv::Mat> vGroundTruthTcw;
     const char *groundTruthPath = std::getenv("DT_SLAM_GT_TRAJECTORY");
     if(groundTruthPath && groundTruthPath[0]!='\0')
@@ -157,6 +174,20 @@ int main(int argc, char **argv)
         std::getenv("DT_SLAM_PRECOMPUTED_MASK_DIR");
     const string precomputedMaskDir =
         precomputedMaskDirEnv ? string(precomputedMaskDirEnv) : string();
+    if(inputRectifier.IsEnabled() && !precomputedMaskDir.empty())
+    {
+        const char *precomputedMaskDomain =
+            std::getenv("DT_SLAM_PRECOMPUTED_MASK_DOMAIN");
+        if(!precomputedMaskDomain ||
+           string(precomputedMaskDomain)!=inputRectifier.DomainName())
+        {
+            cerr << "[RGBD Input] Rectified input requires "
+                 << "DT_SLAM_PRECOMPUTED_MASK_DOMAIN="
+                 << inputRectifier.DomainName()
+                 << " for precomputed masks" << endl;
+            return 1;
+        }
+    }
     if(!precomputedMaskDir.empty() && argc==6)
     {
         cerr << "[DT-SLAM] Precomputed diagnostic masks and online ONNX "
@@ -183,7 +214,22 @@ int main(int argc, char **argv)
         cv::Mat imFirst = cv::imread(string(argv[3]) + "/" + vstrImageFilenamesRGB[0], cv::IMREAD_UNCHANGED);
         if (!imFirst.empty())
         {
-            pYOLO->PushFrame(imFirst, 0);
+            cv::Mat semanticInput;
+            try
+            {
+                inputRectifier.RectifyRGB(imFirst,semanticInput);
+            }
+            catch(const std::exception &error)
+            {
+                cerr << "[RGBD Input] First-frame rectification failed: "
+                     << error.what() << endl;
+                pYOLO->Stop();
+                delete pYOLO;
+                return 1;
+            }
+            cout << "[RGBD Input] "
+                 << inputRectifier.DomainSignature() << endl;
+            pYOLO->PushFrame(semanticInput, 0);
             cv::Mat firstMask;
             if(!pYOLO->WaitForMask(0,firstMask))
             {
@@ -215,6 +261,7 @@ int main(int argc, char **argv)
     // End-to-end timing is intentionally collected without changing the
     // existing processing order or dataset pacing policy.
     vector<double> vImageIOTimes;
+    vector<double> vInputRectificationTimes;
     vector<double> vGetMaskSeqTimes;
     vector<double> vFrameMutexWaitTimes;
     vector<double> vFrameCopyTimes;
@@ -262,20 +309,51 @@ int main(int argc, char **argv)
         // Read image and depthmap from file
         imRGB = cv::imread(string(argv[3])+"/"+vstrImageFilenamesRGB[ni], cv::IMREAD_UNCHANGED);
         imD = cv::imread(string(argv[3])+"/"+vstrImageFilenamesD[ni], cv::IMREAD_UNCHANGED);
-        const std::chrono::steady_clock::time_point tImagesReady =
+        const std::chrono::steady_clock::time_point tImagesLoaded =
             std::chrono::steady_clock::now();
         double tframe = vTimestamps[ni];
 
-        if(imRGB.empty())
+        if(imRGB.empty() || imD.empty())
         {
-            cerr << endl << "Failed to load image at: "
-                 << string(argv[3]) << "/" << vstrImageFilenamesRGB[ni] << endl;
+            cerr << endl << "Failed to load RGB-D pair at: "
+                 << string(argv[3]) << "/" << vstrImageFilenamesRGB[ni]
+                 << " and "
+                 << string(argv[3]) << "/" << vstrImageFilenamesD[ni] << endl;
             return 1;
         }
 
         vImageIOTimes.push_back(
             std::chrono::duration<double,std::milli>(
-                tImagesReady-tLoopStart).count());
+                tImagesLoaded-tLoopStart).count());
+
+        if(inputRectifier.IsEnabled())
+        {
+            cv::Mat rectifiedRGB;
+            cv::Mat rectifiedDepth;
+            try
+            {
+                inputRectifier.RectifyRGBD(
+                    imRGB,imD,rectifiedRGB,rectifiedDepth);
+            }
+            catch(const std::exception &error)
+            {
+                cerr << "[RGBD Input] Frame " << ni
+                     << " rectification failed: " << error.what() << endl;
+                return 1;
+            }
+            imRGB = rectifiedRGB;
+            imD = rectifiedDepth;
+            const std::chrono::steady_clock::time_point tRectificationDone =
+                std::chrono::steady_clock::now();
+            vInputRectificationTimes.push_back(
+                std::chrono::duration<double,std::milli>(
+                    tRectificationDone-tImagesLoaded).count());
+            if(ni==0)
+            {
+                cout << "[RGBD Input] "
+                     << inputRectifier.DomainSignature() << endl;
+            }
+        }
 
         // Phase 0 semantic baseline: every RGB frame is paired with the mask
         // carrying the same sequence number. The worker remains separate, but
@@ -427,6 +505,7 @@ int main(int argc, char **argv)
 
     cout << "[RGBD Timing] End-to-end frame timing (measurement only)" << endl;
     PrintTimingSummary("image_io",vImageIOTimes);
+    PrintTimingSummary("input_rectification",vInputRectificationTimes);
     PrintTimingSummary("get_mask_seq",vGetMaskSeqTimes);
     PrintTimingSummary("frame_mutex_wait",vFrameMutexWaitTimes);
     PrintTimingSummary("frame_copy",vFrameCopyTimes);

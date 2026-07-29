@@ -1,0 +1,71 @@
+%YAML:1.0
+
+# Bonn G2-4B unified undistorted input plus G2-3R3/G2-4A diagnostics.
+# Shadow-only: no dynamic decision or SLAM mutation.
+
+Camera.fx: 542.822841
+Camera.fy: 542.576870
+Camera.cx: 315.593520
+Camera.cy: 237.756098
+
+# RGB and registered depth are rectified before YOLO, ORB and geometry.
+# Tracking must not undistort the already rectified input again.
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.k3: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+
+RGBD.InputRectification.Enable: 1
+RGBD.InputRectification.fx: 542.822841
+RGBD.InputRectification.fy: 542.576870
+RGBD.InputRectification.cx: 315.593520
+RGBD.InputRectification.cy: 237.756098
+RGBD.InputRectification.k1: 0.039903
+RGBD.InputRectification.k2: -0.099343
+RGBD.InputRectification.p1: -0.000730
+RGBD.InputRectification.p2: -0.000144
+RGBD.InputRectification.k3: 0.000000
+
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 1
+Geometry.SingleReferenceShadowEnable: 0
+Geometry.LogEveryN: 30
+Geometry.ResidualThresholdM: 0.10
+Geometry.RegionGrowEnable: 0
+Geometry.DebugSave: 0
+Geometry.MultiReferenceShadowEnable: 1
+Geometry.MultiReferenceCount: 5
+Geometry.MultiReferenceHistory: 20
+Geometry.MultiReferenceSelectionPolicy: "covisibility"
+Geometry.MultiReferenceSamplingPolicy: "pyramid_dense"
+Geometry.MultiReferencePyramidScale: 2
+Geometry.RegionEvidenceShadowEnable: 1
+Geometry.RegionRiskDiagnosticsEnable: 1
+Geometry.RegionPartitionRelativeThreshold: 0.025
+Geometry.RegionPartitionAbsoluteThresholdM: 0.08
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

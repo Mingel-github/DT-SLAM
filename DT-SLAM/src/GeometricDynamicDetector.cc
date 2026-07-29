@@ -1168,6 +1168,53 @@ cv::Mat GeometricDynamicDetector::ScaleCameraMatrix(
     return scaled;
 }
 
+cv::Mat GeometricDynamicDetector::DownsampleMaskAny(
+    const cv::Mat &mask,
+    const int scale)
+{
+    if(mask.empty() || mask.type()!=CV_8UC1)
+    {
+        throw std::invalid_argument(
+            "mask pyramid requires a non-empty CV_8UC1 mask");
+    }
+    if(scale<2)
+        throw std::invalid_argument("mask pyramid scale must be at least 2");
+
+    const int outputRows = (mask.rows+scale-1)/scale;
+    const int outputCols = (mask.cols+scale-1)/scale;
+    cv::Mat output = cv::Mat::zeros(
+        outputRows,outputCols,CV_8UC1);
+    for(int outputV=0; outputV<outputRows; ++outputV)
+    {
+        unsigned char *outputRow =
+            output.ptr<unsigned char>(outputV);
+        const int beginV = outputV*scale;
+        const int endV = std::min(beginV+scale,mask.rows);
+        for(int outputU=0; outputU<outputCols; ++outputU)
+        {
+            const int beginU = outputU*scale;
+            const int endU = std::min(beginU+scale,mask.cols);
+            bool any = false;
+            for(int v=beginV; v<endV && !any; ++v)
+            {
+                const unsigned char *maskRow =
+                    mask.ptr<unsigned char>(v);
+                for(int u=beginU; u<endU; ++u)
+                {
+                    if(maskRow[u]!=0)
+                    {
+                        any = true;
+                        break;
+                    }
+                }
+            }
+            if(any)
+                outputRow[outputU] = 255;
+        }
+    }
+    return output;
+}
+
 GeometricMultiReferenceResult
 GeometricDynamicDetector::ComputePyramidMultiReferenceEvidence(
     const std::vector<GeometricReferenceFrame> &references,
@@ -1265,6 +1312,12 @@ GeometricDynamicDetector::ComputePyramidMultiReferenceEvidence(
     cv::resize(
         pyramid.consistentCount,result.consistentCount,
         currentDepthMeters.size(),0.0,0.0,cv::INTER_NEAREST);
+    result.nativeDepthMeters = currentPyramid;
+    result.nativeComparisonCount = pyramid.comparisonCount;
+    result.nativePositiveCount = pyramid.positiveCount;
+    result.nativeNegativeCount = pyramid.negativeCount;
+    result.nativeConsistentCount = pyramid.consistentCount;
+    result.nativeScale = scale;
     result.perReference = pyramid.perReference;
     result.stats.referenceCount = references.size();
 
@@ -1544,7 +1597,8 @@ GeometricRegionEvidenceAggregationResult
 GeometricDynamicDetector::AggregateMultiReferenceEvidenceByRegion(
     const GeometricRegionPartitionResult &partition,
     const GeometricMultiReferenceResult &evidence,
-    const cv::Mat &semanticProxyMask)
+    const cv::Mat &semanticProxyMask,
+    const bool collectRiskDiagnostics)
 {
     if(partition.labels.empty() ||
        partition.labels.type()!=CV_32SC1)
@@ -1588,6 +1642,34 @@ GeometricDynamicDetector::AggregateMultiReferenceEvidenceByRegion(
             static_cast<int>(regionIndex);
     }
 
+    cv::Mat boundaryWithinOne;
+    cv::Mat boundaryWithinTwo;
+    cv::Mat invalidWithinOne;
+    cv::Mat invalidWithinTwo;
+    if(collectRiskDiagnostics)
+    {
+        cv::Mat boundaryMask;
+        cv::compare(partition.labels,-2,boundaryMask,cv::CMP_EQ);
+        cv::Mat invalidMask;
+        cv::compare(partition.labels,-1,invalidMask,cv::CMP_EQ);
+        cv::dilate(
+            boundaryMask,boundaryWithinOne,
+            cv::getStructuringElement(
+                cv::MORPH_RECT,cv::Size(3,3)));
+        cv::dilate(
+            boundaryMask,boundaryWithinTwo,
+            cv::getStructuringElement(
+                cv::MORPH_RECT,cv::Size(5,5)));
+        cv::dilate(
+            invalidMask,invalidWithinOne,
+            cv::getStructuringElement(
+                cv::MORPH_RECT,cv::Size(3,3)));
+        cv::dilate(
+            invalidMask,invalidWithinTwo,
+            cv::getStructuringElement(
+                cv::MORPH_RECT,cv::Size(5,5)));
+    }
+
     const bool hasSemanticProxy = !semanticProxyMask.empty();
     for(int v=0; v<size.height; ++v)
     {
@@ -1604,6 +1686,18 @@ GeometricDynamicDetector::AggregateMultiReferenceEvidenceByRegion(
             hasSemanticProxy
                 ? semanticProxyMask.ptr<unsigned char>(v)
                 : static_cast<const unsigned char*>(NULL);
+        const unsigned char *boundaryOneRow =
+            collectRiskDiagnostics
+                ? boundaryWithinOne.ptr<unsigned char>(v) : NULL;
+        const unsigned char *boundaryTwoRow =
+            collectRiskDiagnostics
+                ? boundaryWithinTwo.ptr<unsigned char>(v) : NULL;
+        const unsigned char *invalidOneRow =
+            collectRiskDiagnostics
+                ? invalidWithinOne.ptr<unsigned char>(v) : NULL;
+        const unsigned char *invalidTwoRow =
+            collectRiskDiagnostics
+                ? invalidWithinTwo.ptr<unsigned char>(v) : NULL;
         for(int u=0; u<size.width; ++u)
         {
             const int label = labelRow[u];
@@ -1630,6 +1724,23 @@ GeometricDynamicDetector::AggregateMultiReferenceEvidenceByRegion(
                 result.regions[static_cast<std::size_t>(label)];
             ++region.regionPixels;
             ++result.stats.regionPixels;
+            GeometricRegionRiskBandStats *riskBands[4] = {
+                boundaryOneRow && boundaryOneRow[u]!=0
+                    ? &region.boundaryWithinOnePixel : NULL,
+                boundaryTwoRow && boundaryTwoRow[u]!=0
+                    ? &region.boundaryWithinTwoPixels : NULL,
+                invalidOneRow && invalidOneRow[u]!=0
+                    ? &region.invalidWithinOnePixel : NULL,
+                invalidTwoRow && invalidTwoRow[u]!=0
+                    ? &region.invalidWithinTwoPixels : NULL
+            };
+            for(int riskIndex=0;
+                collectRiskDiagnostics && riskIndex<4;
+                ++riskIndex)
+            {
+                if(riskBands[riskIndex])
+                    ++riskBands[riskIndex]->regionPixels;
+            }
             const bool isSemanticProxy =
                 semanticRow && semanticRow[u]!=0;
             if(isSemanticProxy)
@@ -1639,6 +1750,13 @@ GeometricDynamicDetector::AggregateMultiReferenceEvidenceByRegion(
 
             ++region.comparisonPixels;
             ++result.stats.comparisonPixels;
+            if(collectRiskDiagnostics)
+            {
+                if(comparisons==1)
+                    ++region.singleReferenceComparisonPixels;
+                else
+                    ++region.multiReferenceComparisonPixels;
+            }
             if(isSemanticProxy)
                 ++region.semanticComparisonPixels;
             region.comparisonVotes += comparisons;
@@ -1646,9 +1764,39 @@ GeometricDynamicDetector::AggregateMultiReferenceEvidenceByRegion(
             region.negativeVotes += negatives;
             region.consistentVotes += consistent;
             result.stats.comparisonVotes += comparisons;
+            for(int riskIndex=0;
+                collectRiskDiagnostics && riskIndex<4;
+                ++riskIndex)
+            {
+                if(!riskBands[riskIndex])
+                    continue;
+                ++riskBands[riskIndex]->comparisonPixels;
+                riskBands[riskIndex]->comparisonVotes += comparisons;
+                riskBands[riskIndex]->positiveVotes += positives;
+            }
             if(positives>0)
             {
                 ++region.positivePresencePixels;
+                if(collectRiskDiagnostics && comparisons==1)
+                {
+                    ++region.singleReferencePositivePresencePixels;
+                }
+                else if(collectRiskDiagnostics)
+                {
+                    ++region.multiReferencePositivePresencePixels;
+                }
+                if(collectRiskDiagnostics && positives==comparisons)
+                    ++region.unanimousPositivePixels;
+                for(int riskIndex=0;
+                    collectRiskDiagnostics && riskIndex<4;
+                    ++riskIndex)
+                {
+                    if(riskBands[riskIndex])
+                    {
+                        ++riskBands[riskIndex]->
+                            positivePresencePixels;
+                    }
+                }
                 if(isSemanticProxy)
                     ++region.semanticPositivePresencePixels;
             }

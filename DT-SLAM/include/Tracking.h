@@ -300,6 +300,8 @@ protected:
 
     // G2-3R1 fixed-region evidence distributions. Shadow-only.
     bool mbGeometryRegionEvidenceShadowEnabled;
+    bool mbGeometryRegionRiskDiagnosticsEnabled;
+    bool mbGeometryLowResolutionRegionShadowEnabled;
     float mGeometryRegionRelativeThreshold;
     float mGeometryRegionAbsoluteThresholdMeters;
     std::string mGeometryRegionEvidenceCsvPath;

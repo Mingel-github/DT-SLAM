@@ -1,0 +1,57 @@
+%YAML:1.0
+
+# TUM fr3 G2-3R4 scale-2 native-cell region candidate.
+# Shadow-only: no dynamic decision or SLAM mutation.
+
+Camera.fx: 535.4
+Camera.fy: 539.2
+Camera.cx: 320.1
+Camera.cy: 247.6
+
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 1
+Geometry.SingleReferenceShadowEnable: 0
+Geometry.LogEveryN: 30
+Geometry.ResidualThresholdM: 0.10
+Geometry.RegionGrowEnable: 0
+Geometry.DebugSave: 0
+Geometry.MultiReferenceShadowEnable: 1
+Geometry.MultiReferenceCount: 5
+Geometry.MultiReferenceHistory: 20
+Geometry.MultiReferenceSelectionPolicy: "covisibility"
+Geometry.MultiReferenceSamplingPolicy: "pyramid_dense"
+Geometry.MultiReferencePyramidScale: 2
+Geometry.RegionEvidenceShadowEnable: 1
+Geometry.LowResolutionRegionShadowEnable: 1
+Geometry.RegionPartitionRelativeThreshold: 0.025
+Geometry.RegionPartitionAbsoluteThresholdM: 0.08
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

@@ -298,6 +298,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mbGeometryMultiReferenceDenseAuditEnabled(false),
     mnGeometryMultiReferenceComputedFrames(0),
     mbGeometryRegionEvidenceShadowEnabled(false),
+    mbGeometryRegionRiskDiagnosticsEnabled(false),
+    mbGeometryLowResolutionRegionShadowEnabled(false),
     mGeometryRegionRelativeThreshold(0.025f),
     mGeometryRegionAbsoluteThresholdMeters(0.08f),
     mnGeometryRegionEvidenceComputedFrames(0),
@@ -457,6 +459,26 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
 
     LoadGeometryCameraMatrix(
         fSettings,mK,mGeometryK,mbGeometryUsesDedicatedCameraModel);
+    const cv::FileNode rgbdInputRectificationNode =
+        fSettings["RGBD.InputRectification.Enable"];
+    const bool rgbdInputRectificationEnabled =
+        !rgbdInputRectificationNode.empty() &&
+        static_cast<int>(rgbdInputRectificationNode)!=0;
+    if(rgbdInputRectificationEnabled &&
+       cv::norm(mDistCoef,cv::NORM_INF)>1e-8)
+    {
+        throw std::invalid_argument(
+            "RGBD.InputRectification.Enable=1 requires zero Camera "
+            "distortion in Tracking");
+    }
+    if(rgbdInputRectificationEnabled &&
+       mbGeometryUsesDedicatedCameraModel &&
+       cv::norm(mGeometryK-mK,cv::NORM_INF)>1e-6)
+    {
+        throw std::invalid_argument(
+            "Rectified RGB-D input requires Geometry.Camera K to match "
+            "the tracking Camera K");
+    }
     mGeometricDetector.SetCameraMatrix(mGeometryK);
     mGeometricGroundTruthDetector.SetCameraMatrix(mGeometryK);
     mJiGeometryBaseline.SetCameraMatrix(mGeometryK);
@@ -607,6 +629,31 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             static_cast<int>(
                 geometryRegionEvidenceEnableNode)!=0;
     }
+    const cv::FileNode geometryRegionRiskDiagnosticsNode =
+        fSettings["Geometry.RegionRiskDiagnosticsEnable"];
+    if(!geometryRegionRiskDiagnosticsNode.empty())
+    {
+        mbGeometryRegionRiskDiagnosticsEnabled =
+            static_cast<int>(
+                geometryRegionRiskDiagnosticsNode)!=0;
+    }
+    const char *regionRiskDiagnosticsOverride =
+        std::getenv(
+            "DT_SLAM_GEOMETRY_REGION_RISK_DIAGNOSTICS");
+    if(regionRiskDiagnosticsOverride &&
+       regionRiskDiagnosticsOverride[0]!='\0')
+    {
+        mbGeometryRegionRiskDiagnosticsEnabled =
+            std::string(regionRiskDiagnosticsOverride)!="0";
+    }
+    const cv::FileNode geometryLowResolutionRegionEnableNode =
+        fSettings["Geometry.LowResolutionRegionShadowEnable"];
+    if(!geometryLowResolutionRegionEnableNode.empty())
+    {
+        mbGeometryLowResolutionRegionShadowEnabled =
+            static_cast<int>(
+                geometryLowResolutionRegionEnableNode)!=0;
+    }
     const cv::FileNode geometryRegionRelativeThresholdNode =
         fSettings["Geometry.RegionPartitionRelativeThreshold"];
     if(!geometryRegionRelativeThresholdNode.empty())
@@ -639,6 +686,22 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         throw std::invalid_argument(
             "Geometry.RegionEvidenceShadowEnable=1 requires "
             "Geometry.MultiReferenceShadowEnable=1");
+    }
+    if(mbGeometryRegionRiskDiagnosticsEnabled &&
+       !mbGeometryRegionEvidenceShadowEnabled)
+    {
+        throw std::invalid_argument(
+            "Geometry.RegionRiskDiagnosticsEnable=1 requires "
+            "Geometry.RegionEvidenceShadowEnable=1");
+    }
+    if(mbGeometryLowResolutionRegionShadowEnabled &&
+       (!mbGeometryRegionEvidenceShadowEnabled ||
+        mGeometryMultiReferenceSamplingPolicy!="pyramid_dense"))
+    {
+        throw std::invalid_argument(
+            "Geometry.LowResolutionRegionShadowEnable=1 requires "
+            "Geometry.RegionEvidenceShadowEnable=1 and "
+            "Geometry.MultiReferenceSamplingPolicy=pyramid_dense");
     }
     if(mnGeometryMultiReferenceMaxReferences<1 ||
        mnGeometryMultiReferenceMaxReferences>255)
@@ -841,18 +904,29 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         cout << "- G0 single-reference shadow: "
              << (mbGeometrySingleReferenceShadowEnabled ?
                  "enabled" : "disabled") << endl;
-        cout << "- pixel domain: raw registered RGB/depth pixels" << endl;
+        cout << "- pixel domain: "
+             << (rgbdInputRectificationEnabled ?
+                 "jointly rectified RGB/registered-depth input pixels" :
+                 "raw registered RGB/depth pixels")
+             << endl;
         cout << "- camera model: "
-             << (mbGeometryUsesDedicatedCameraModel ?
+             << (rgbdInputRectificationEnabled ?
+                 "shared rectified tracking/geometry pinhole K" :
+                 (mbGeometryUsesDedicatedCameraModel ?
                  "dedicated raw registered pinhole K" :
-                 "tracking pinhole K")
+                 "tracking pinhole K"))
              << " with zero distortion" << endl;
         cout << "- geometry fx: " << mGeometryK.at<float>(0,0) << endl;
         cout << "- geometry fy: " << mGeometryK.at<float>(1,1) << endl;
         cout << "- geometry cx: " << mGeometryK.at<float>(0,2) << endl;
         cout << "- geometry cy: " << mGeometryK.at<float>(1,2) << endl;
-        cout << "- semantic/feature labeling domain: Frame::mvKeys" << endl;
-        cout << "- optimizer feature domain: Frame::mvKeysUn" << endl;
+        cout << "- semantic/feature labeling domain: Frame::mvKeys"
+             << (rgbdInputRectificationEnabled ?
+                 " in rectified input" : "") << endl;
+        cout << "- optimizer feature domain: Frame::mvKeysUn"
+             << (rgbdInputRectificationEnabled ?
+                 " (same pixels because Camera distortion is zero)" : "")
+             << endl;
         cout << "- log every: " << mnGeometryLogEveryN << " computed frames" << endl;
         cout << "- provisional residual threshold: "
              << mGeometricDetector.ResidualThresholdMeters() << " m" << endl;
@@ -933,6 +1007,12 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
                          ? "enabled" : "disabled") << endl;
             if(mbGeometryRegionEvidenceShadowEnabled)
             {
+                cout << "- G2-4A region risk diagnostics: "
+                     << (mbGeometryRegionRiskDiagnosticsEnabled
+                             ? "enabled" : "disabled") << endl;
+                cout << "- G2-3R4 low-resolution region candidate: "
+                     << (mbGeometryLowResolutionRegionShadowEnabled
+                             ? "enabled" : "disabled") << endl;
                 cout << "- G2-3R1 depth boundary thresholds: relative="
                      << mGeometryRegionRelativeThreshold
                      << ", absolute="
@@ -1280,10 +1360,37 @@ void Tracking::SaveGeometryPoseDiagnostics()
                    << "negative_compared_pixel_ratio,"
                    << "consistent_compared_pixel_ratio,"
                    << "positive_vote_ratio,negative_vote_ratio,"
-                   << "consistent_vote_ratio,valid_depth_pixels,"
+                   << "consistent_vote_ratio,"
+                   << "single_reference_comparison_pixels,"
+                   << "multi_reference_comparison_pixels,"
+                   << "single_reference_positive_presence_pixels,"
+                   << "multi_reference_positive_presence_pixels,"
+                   << "unanimous_positive_pixels,"
+                   << "boundary_d1_region_pixels,"
+                   << "boundary_d1_comparison_pixels,"
+                   << "boundary_d1_positive_presence_pixels,"
+                   << "boundary_d1_comparison_votes,"
+                   << "boundary_d1_positive_votes,"
+                   << "boundary_d2_region_pixels,"
+                   << "boundary_d2_comparison_pixels,"
+                   << "boundary_d2_positive_presence_pixels,"
+                   << "boundary_d2_comparison_votes,"
+                   << "boundary_d2_positive_votes,"
+                   << "invalid_d1_region_pixels,"
+                   << "invalid_d1_comparison_pixels,"
+                   << "invalid_d1_positive_presence_pixels,"
+                   << "invalid_d1_comparison_votes,"
+                   << "invalid_d1_positive_votes,"
+                   << "invalid_d2_region_pixels,"
+                   << "invalid_d2_comparison_pixels,"
+                   << "invalid_d2_positive_presence_pixels,"
+                   << "invalid_d2_comparison_votes,"
+                   << "invalid_d2_positive_votes,"
+                   << "valid_depth_pixels,"
                    << "boundary_pixels,partition_region_count,"
                    << "largest_region_valid_ratio,"
-                   << "top_five_region_valid_ratio,partition_ms,"
+                   << "top_five_region_valid_ratio,domain_scale,"
+                   << "partition_ms,mapping_ms,online_region_ms,"
                    << "regions_with_comparison,"
                    << "regions_with_positive,aggregation_ms\n";
             stream << std::setprecision(15);
@@ -1327,12 +1434,44 @@ void Tracking::SaveGeometryPoseDiagnostics()
                        << region.positiveVoteRatio << ","
                        << region.negativeVoteRatio << ","
                        << region.consistentVoteRatio << ","
+                       << region.singleReferenceComparisonPixels << ","
+                       << region.multiReferenceComparisonPixels << ","
+                       << region.singleReferencePositivePresencePixels << ","
+                       << region.multiReferencePositivePresencePixels << ","
+                       << region.unanimousPositivePixels << ","
+                       << region.boundaryWithinOnePixel.regionPixels << ","
+                       << region.boundaryWithinOnePixel.comparisonPixels << ","
+                       << region.boundaryWithinOnePixel.
+                              positivePresencePixels << ","
+                       << region.boundaryWithinOnePixel.comparisonVotes << ","
+                       << region.boundaryWithinOnePixel.positiveVotes << ","
+                       << region.boundaryWithinTwoPixels.regionPixels << ","
+                       << region.boundaryWithinTwoPixels.comparisonPixels << ","
+                       << region.boundaryWithinTwoPixels.
+                              positivePresencePixels << ","
+                       << region.boundaryWithinTwoPixels.comparisonVotes << ","
+                       << region.boundaryWithinTwoPixels.positiveVotes << ","
+                       << region.invalidWithinOnePixel.regionPixels << ","
+                       << region.invalidWithinOnePixel.comparisonPixels << ","
+                       << region.invalidWithinOnePixel.
+                              positivePresencePixels << ","
+                       << region.invalidWithinOnePixel.comparisonVotes << ","
+                       << region.invalidWithinOnePixel.positiveVotes << ","
+                       << region.invalidWithinTwoPixels.regionPixels << ","
+                       << region.invalidWithinTwoPixels.comparisonPixels << ","
+                       << region.invalidWithinTwoPixels.
+                              positivePresencePixels << ","
+                       << region.invalidWithinTwoPixels.comparisonVotes << ","
+                       << region.invalidWithinTwoPixels.positiveVotes << ","
                        << partition.validDepthPixels << ","
                        << partition.boundaryPixels << ","
                        << partition.regionCount << ","
                        << partition.largestRegionValidRatio << ","
                        << partition.topFiveRegionValidRatio << ","
+                       << partition.domainScale << ","
                        << partition.totalMs << ","
+                       << partition.mappingMs << ","
+                       << partition.onlineTotalMs << ","
                        << aggregation.regionsWithComparison << ","
                        << aggregation.regionsWithPositiveEvidence << ","
                        << aggregation.totalMs << "\n";
@@ -2345,17 +2484,104 @@ void Tracking::RunMultiReferenceGeometryShadow()
     {
         try
         {
-            regionPartition =
-                GeometricDynamicDetector::
-                    PartitionDepthByDiscontinuity(
-                        mCurrentDepthMeters,
-                        mGeometryRegionRelativeThreshold,
-                        mGeometryRegionAbsoluteThresholdMeters);
-            regionAggregation =
-                GeometricDynamicDetector::
-                    AggregateMultiReferenceEvidenceByRegion(
-                        regionPartition,result,
-                        mCurrentFrame.mSemanticMask);
+            if(mbGeometryLowResolutionRegionShadowEnabled)
+            {
+                if(result.nativeDepthMeters.empty() ||
+                   result.nativeComparisonCount.empty() ||
+                   result.nativeScale!=
+                       mnGeometryMultiReferencePyramidScale)
+                {
+                    throw std::logic_error(
+                        "low-resolution region candidate requires "
+                        "native pyramid depth and evidence");
+                }
+
+                regionPartition =
+                    GeometricDynamicDetector::
+                        PartitionDepthByDiscontinuity(
+                            result.nativeDepthMeters,
+                            mGeometryRegionRelativeThreshold,
+                            mGeometryRegionAbsoluteThresholdMeters);
+                regionPartition.stats.domainScale =
+                    result.nativeScale;
+
+                GeometricMultiReferenceResult nativeEvidence;
+                nativeEvidence.comparisonCount =
+                    result.nativeComparisonCount;
+                nativeEvidence.positiveCount =
+                    result.nativePositiveCount;
+                nativeEvidence.negativeCount =
+                    result.nativeNegativeCount;
+                nativeEvidence.consistentCount =
+                    result.nativeConsistentCount;
+
+                cv::Mat nativeSemanticProxy;
+                if(!mCurrentFrame.mSemanticMask.empty())
+                {
+                    nativeSemanticProxy =
+                        GeometricDynamicDetector::
+                            DownsampleMaskAny(
+                                mCurrentFrame.mSemanticMask,
+                                result.nativeScale);
+                }
+                regionAggregation =
+                    GeometricDynamicDetector::
+                        AggregateMultiReferenceEvidenceByRegion(
+                            regionPartition,nativeEvidence,
+                            nativeSemanticProxy,
+                            mbGeometryRegionRiskDiagnosticsEnabled);
+
+                const std::chrono::steady_clock::time_point
+                    mappingStart =
+                        std::chrono::steady_clock::now();
+                cv::Mat mappedLabels;
+                cv::Mat mappedBoundary;
+                cv::Mat repeatedLabels;
+                cv::Mat repeatedBoundary;
+                cv::repeat(
+                    regionPartition.labels,result.nativeScale,
+                    result.nativeScale,repeatedLabels);
+                cv::repeat(
+                    regionPartition.boundaryMask,
+                    result.nativeScale,result.nativeScale,
+                    repeatedBoundary);
+                repeatedLabels(
+                    cv::Rect(
+                        0,0,mCurrentDepthMeters.cols,
+                        mCurrentDepthMeters.rows)).copyTo(
+                            mappedLabels);
+                repeatedBoundary(
+                    cv::Rect(
+                        0,0,mCurrentDepthMeters.cols,
+                        mCurrentDepthMeters.rows)).copyTo(
+                            mappedBoundary);
+                regionPartition.stats.mappingMs =
+                    std::chrono::duration<double,std::milli>(
+                        std::chrono::steady_clock::now()-
+                        mappingStart).count();
+                regionPartition.stats.onlineTotalMs =
+                    regionPartition.stats.totalMs+
+                    regionAggregation.stats.totalMs+
+                    regionPartition.stats.mappingMs;
+            }
+            else
+            {
+                regionPartition =
+                    GeometricDynamicDetector::
+                        PartitionDepthByDiscontinuity(
+                            mCurrentDepthMeters,
+                            mGeometryRegionRelativeThreshold,
+                            mGeometryRegionAbsoluteThresholdMeters);
+                regionAggregation =
+                    GeometricDynamicDetector::
+                        AggregateMultiReferenceEvidenceByRegion(
+                            regionPartition,result,
+                            mCurrentFrame.mSemanticMask,
+                            mbGeometryRegionRiskDiagnosticsEnabled);
+                regionPartition.stats.onlineTotalMs =
+                    regionPartition.stats.totalMs+
+                    regionAggregation.stats.totalMs;
+            }
             hasRegionEvidenceAggregation = true;
             ++mnGeometryRegionEvidenceComputedFrames;
 
@@ -2376,13 +2602,15 @@ void Tracking::RunMultiReferenceGeometryShadow()
                     record);
             }
 
-            if(hasDenseAuditResult)
+            if(hasDenseAuditResult &&
+               !mbGeometryLowResolutionRegionShadowEnabled)
             {
                 denseRegionAggregation =
                     GeometricDynamicDetector::
                         AggregateMultiReferenceEvidenceByRegion(
                             regionPartition,denseAuditResult,
-                            mCurrentFrame.mSemanticMask);
+                            mCurrentFrame.mSemanticMask,
+                            mbGeometryRegionRiskDiagnosticsEnabled);
                 hasDenseRegionEvidenceAggregation = true;
 
                 for(std::size_t regionIndex=0;
