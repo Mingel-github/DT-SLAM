@@ -1177,6 +1177,209 @@ void TestSparseEgoFlowDepthRiskDiagnostics()
         "invalid depth must not be reinterpreted as a depth boundary");
 }
 
+ORB_SLAM2::GeometricSparseFlowResult MakeRigiditySparseFlow(
+    const std::vector<cv::Point2f> &referencePixels,
+    const std::vector<cv::Point2f> &currentPixels,
+    const float referenceDepthMeters = 2.0f)
+{
+    Require(referencePixels.size()==currentPixels.size(),
+            "rigidity synthetic pixel vectors must match");
+    ORB_SLAM2::GeometricSparseFlowResult result;
+    result.samples.resize(currentPixels.size());
+    for(std::size_t index=0; index<currentPixels.size(); ++index)
+    {
+        ORB_SLAM2::GeometricSparseFlowSample &sample =
+            result.samples[index];
+        sample.featureIndex = index;
+        sample.referencePixel = referencePixels[index];
+        sample.currentPixel = currentPixels[index];
+        sample.forwardBackPixel = currentPixels[index];
+        sample.forwardBackwardErrorPixels = 0.0f;
+        sample.referenceDepthMeters = referenceDepthMeters;
+        sample.referenceDepthValid = true;
+        sample.backwardLkValid = true;
+        sample.forwardLkValid = true;
+        sample.slamProjectionValid = true;
+        sample.evidenceState =
+            ORB_SLAM2::GeometricSparseFlowEvidenceState::Measured;
+    }
+    return result;
+}
+
+void TestLocalRigidityRigidTranslation()
+{
+    const std::vector<cv::Point2f> reference = {
+        cv::Point2f(30.0f,25.0f),
+        cv::Point2f(90.0f,25.0f),
+        cv::Point2f(90.0f,70.0f),
+        cv::Point2f(30.0f,70.0f),
+        cv::Point2f(60.0f,48.0f)};
+    std::vector<cv::Point2f> current = reference;
+    for(std::size_t index=0; index<current.size(); ++index)
+        current[index].x += 2.0f;
+    const cv::Mat depth(
+        cv::Size(128,96),CV_32FC1,cv::Scalar(2.0f));
+    const ORB_SLAM2::GeometricRigidityResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidity(
+                depth,depth,SparseFlowCameraMatrix(),
+                MakeRigiditySparseFlow(reference,current));
+
+    Require(result.stats.eligibleNodeCount==reference.size(),
+            "rigid graph must retain all valid nodes");
+    Require(result.stats.validEdgeCount>=5,
+            "rigid graph must contain Delaunay edges");
+    for(std::size_t index=0; index<result.edges.size(); ++index)
+    {
+        Require(result.edges[index].absoluteStrainMeters<1e-5f,
+                "rigid image translation must preserve 3-D edge lengths");
+        Require(
+            result.edges[index].uncertaintyNormalizedStrain<1e-3f,
+            "rigid image translation must have near-zero normalized strain");
+    }
+}
+
+void TestLocalRigidityIndependentNode()
+{
+    const std::vector<cv::Point2f> reference = {
+        cv::Point2f(30.0f,25.0f),
+        cv::Point2f(90.0f,25.0f),
+        cv::Point2f(90.0f,70.0f),
+        cv::Point2f(30.0f,70.0f),
+        cv::Point2f(60.0f,48.0f)};
+    std::vector<cv::Point2f> current = reference;
+    for(std::size_t index=0; index<current.size(); ++index)
+        current[index].x += 2.0f;
+    current[4].x += 8.0f;
+    const cv::Mat depth(
+        cv::Size(128,96),CV_32FC1,cv::Scalar(2.0f));
+    const ORB_SLAM2::GeometricRigidityResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidity(
+                depth,depth,SparseFlowCameraMatrix(),
+                MakeRigiditySparseFlow(reference,current));
+
+    bool incidentEdgeChanged = false;
+    bool backgroundEdgePreserved = false;
+    for(std::size_t index=0; index<result.edges.size(); ++index)
+    {
+        const ORB_SLAM2::GeometricRigidityEdgeSample &edge =
+            result.edges[index];
+        if(edge.featureIndexA==4 || edge.featureIndexB==4)
+        {
+            incidentEdgeChanged =
+                incidentEdgeChanged ||
+                edge.absoluteStrainMeters>0.01f;
+        }
+        else
+        {
+            backgroundEdgePreserved =
+                backgroundEdgePreserved ||
+                edge.absoluteStrainMeters<1e-5f;
+        }
+    }
+    Require(incidentEdgeChanged,
+            "independent node must change at least one incident edge");
+    Require(backgroundEdgePreserved,
+            "independent node must not change every background edge");
+    Require(
+        result.nodes[4].incidentAbsoluteStrainMedianMeters>0.01f,
+        "independent node must have elevated local strain");
+    Require(
+        result.nodes[4].
+            incidentUncertaintyNormalizedStrainMedian>0.0f,
+        "independent node must have positive uncertainty-normalized strain");
+}
+
+void TestLocalRigidityInvalidAndDuplicateNodes()
+{
+    const std::vector<cv::Point2f> reference = {
+        cv::Point2f(30.0f,25.0f),
+        cv::Point2f(90.0f,25.0f),
+        cv::Point2f(90.0f,70.0f),
+        cv::Point2f(30.0f,70.0f),
+        cv::Point2f(30.0f,25.0f)};
+    std::vector<cv::Point2f> current = reference;
+    current[4] = cv::Point2f(30.00005f,25.00005f);
+    cv::Mat depth(
+        cv::Size(128,96),CV_32FC1,cv::Scalar(2.0f));
+    depth.at<float>(70,90) = 0.0f;
+    const ORB_SLAM2::GeometricRigidityResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidity(
+                depth,depth,SparseFlowCameraMatrix(),
+                MakeRigiditySparseFlow(reference,current));
+
+    Require(result.stats.currentDepthInvalidCount==1,
+            "invalid current depth must remain no rigidity evidence");
+    Require(result.stats.duplicateImagePointCount==1,
+            "numerically near-duplicate image point must be rejected explicitly");
+    for(std::size_t index=0; index<result.edges.size(); ++index)
+    {
+        Require(
+            result.edges[index].featureIndexA!=
+                result.edges[index].featureIndexB,
+            "rigidity graph must not contain self edges");
+    }
+}
+
+void TestLocalRigidityDepthUncertaintyScaling()
+{
+    const std::vector<cv::Point2f> pixels = {
+        cv::Point2f(30.0f,25.0f),
+        cv::Point2f(90.0f,25.0f),
+        cv::Point2f(90.0f,70.0f),
+        cv::Point2f(30.0f,70.0f),
+        cv::Point2f(60.0f,48.0f)};
+    const cv::Mat nearDepth(
+        cv::Size(128,96),CV_32FC1,cv::Scalar(2.0f));
+    const cv::Mat farDepth(
+        cv::Size(128,96),CV_32FC1,cv::Scalar(4.0f));
+    const ORB_SLAM2::GeometricRigidityResult nearResult =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidity(
+                nearDepth,nearDepth,SparseFlowCameraMatrix(),
+                MakeRigiditySparseFlow(pixels,pixels,2.0f));
+    const ORB_SLAM2::GeometricRigidityResult farResult =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidity(
+                farDepth,farDepth,SparseFlowCameraMatrix(),
+                MakeRigiditySparseFlow(pixels,pixels,4.0f));
+    Require(
+        farResult.nodes[0].referenceDepthUncertaintyStdMeters>
+            3.5f*nearResult.nodes[0].
+                referenceDepthUncertaintyStdMeters,
+        "depth-square model must increase uncertainty with range");
+}
+
+void TestLocalRigidityDepthMixtureUncertainty()
+{
+    const std::vector<cv::Point2f> pixels = {
+        cv::Point2f(30.0f,25.0f),
+        cv::Point2f(90.0f,25.0f),
+        cv::Point2f(90.0f,70.0f),
+        cv::Point2f(30.0f,70.0f),
+        cv::Point2f(60.0f,48.0f)};
+    const cv::Mat referenceDepth(
+        cv::Size(128,96),CV_32FC1,cv::Scalar(2.0f));
+    cv::Mat currentDepth = referenceDepth.clone();
+    currentDepth.colRange(61,currentDepth.cols).setTo(4.0f);
+    const ORB_SLAM2::GeometricRigidityResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidity(
+                referenceDepth,currentDepth,
+                SparseFlowCameraMatrix(),
+                MakeRigiditySparseFlow(pixels,pixels,2.0f));
+    Require(
+        result.nodes[4].currentDepthUncertaintyStdMeters>
+            10.0f*result.nodes[0].
+                currentDepthUncertaintyStdMeters,
+        "3x3 depth mixture must expose discontinuity uncertainty");
+    Require(
+        result.nodes[4].currentDepthNeighborhoodValidWeight==1.0f,
+        "valid mixed-depth neighborhood must retain full valid weight");
+}
+
 } // namespace
 
 int main()
@@ -1211,15 +1414,20 @@ int main()
         TestSparseEgoFlowCameraAndIndependentMotion();
         TestSparseEgoFlowInvalidEvidence();
         TestSparseEgoFlowDepthRiskDiagnostics();
+        TestLocalRigidityRigidTranslation();
+        TestLocalRigidityIndependentNode();
+        TestLocalRigidityInvalidAndDuplicateNodes();
+        TestLocalRigidityDepthUncertaintyScaling();
+        TestLocalRigidityDepthMixtureUncertainty();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B Test] PASS"
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U Test] PASS"
               << std::endl;
     return 0;
 }

@@ -326,6 +326,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mnGeometryMultiReferenceComputedFrames(0),
     mbGeometrySparseEgoFlowShadowEnabled(false),
     mnGeometrySparseFlowComputedFrames(0),
+    mbGeometryLocalRigidityShadowEnabled(false),
+    mnGeometryLocalRigidityComputedFrames(0),
     mbGeometryRegionEvidenceShadowEnabled(false),
     mbGeometryRegionRiskDiagnosticsEnabled(false),
     mbGeometryLowResolutionRegionShadowEnabled(false),
@@ -478,6 +480,21 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         throw std::invalid_argument(
             "Geometry.SparseEgoFlowShadowEnable=1 requires "
             "Geometry.Enable=1 and RGB-D input");
+    }
+    const cv::FileNode geometryLocalRigidityEnableNode =
+        fSettings["Geometry.LocalRigidityShadowEnable"];
+    if(!geometryLocalRigidityEnableNode.empty())
+    {
+        mbGeometryLocalRigidityShadowEnabled =
+            static_cast<int>(
+                geometryLocalRigidityEnableNode)!=0;
+    }
+    if(mbGeometryLocalRigidityShadowEnabled &&
+       !mbGeometrySparseEgoFlowShadowEnabled)
+    {
+        throw std::invalid_argument(
+            "Geometry.LocalRigidityShadowEnable=1 requires "
+            "Geometry.SparseEgoFlowShadowEnable=1");
     }
 
     const cv::FileNode jiGeometryEnableNode =
@@ -826,6 +843,16 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             ParseFrameIdFilter(
                 std::getenv(
                     "DT_SLAM_GEOMETRY_SPARSE_FLOW_FRAME_IDS"));
+    }
+    const char *localRigidityCsv =
+        std::getenv("DT_SLAM_GEOMETRY_LOCAL_RIGIDITY_CSV");
+    if(localRigidityCsv && localRigidityCsv[0]!='\0')
+    {
+        mGeometryLocalRigidityCsvPath = localRigidityCsv;
+        mGeometryLocalRigidityFrameFilter =
+            ParseFrameIdFilter(
+                std::getenv(
+                    "DT_SLAM_GEOMETRY_LOCAL_RIGIDITY_FRAME_IDS"));
     }
     const char *referenceSelectionCsv =
         std::getenv("DT_SLAM_GEOMETRY_REFERENCE_SELECTION_CSV");
@@ -1690,6 +1717,260 @@ void Tracking::SaveGeometryPoseDiagnostics()
         }
     }
 
+    if(!mGeometryLocalRigidityCsvPath.empty() &&
+       !mvGeometryLocalRigidityNodeDiagnostics.empty())
+    {
+        ofstream stream(mGeometryLocalRigidityCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-4F3] failed to open local-rigidity "
+                 << "node CSV: "
+                 << mGeometryLocalRigidityCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,reference_frame,"
+                << "reference_timestamp,dt_seconds,feature_index,"
+                << "u_current,v_current,u_reference,v_reference,"
+                << "octave,has_mappoint,semantic_nonzero,"
+                << "forward_backward_error_px,"
+                << "flow_residual_magnitude_px,"
+                << "x_reference_m,y_reference_m,z_reference_m,"
+                << "x_current_m,y_current_m,z_current_m,"
+                << "reference_depth_uncertainty_std_m,"
+                << "current_depth_uncertainty_std_m,"
+                << "reference_depth_neighborhood_valid_weight,"
+                << "current_depth_neighborhood_valid_weight,"
+                << "valid_neighbors,"
+                << "absolute_strain_median_m,"
+                << "absolute_strain_p90_m,"
+                << "relative_strain_median,"
+                << "relative_strain_p90,"
+                << "uncertainty_normalized_strain_median,"
+                << "uncertainty_normalized_strain_p90,"
+                << "evidence_state\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometryLocalRigidityNodeDiagnostics.size();
+                ++index)
+            {
+                const GeometryLocalRigidityNodeRecord &record =
+                    mvGeometryLocalRigidityNodeDiagnostics[index];
+                const GeometricRigidityNodeSample &sample =
+                    record.sample;
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.referenceFrameId << ","
+                       << record.referenceTimestamp << ","
+                       << record.timestamp-
+                          record.referenceTimestamp << ","
+                       << sample.featureIndex << ","
+                       << sample.currentPixel.x << ","
+                       << sample.currentPixel.y << ","
+                       << sample.referencePixel.x << ","
+                       << sample.referencePixel.y << ","
+                       << record.octave << ","
+                       << (record.hasMapPoint ? 1 : 0) << ","
+                       << (record.semanticNonzero ? 1 : 0) << ","
+                       << sample.forwardBackwardErrorPixels << ","
+                       << sample.flowResidualMagnitudePixels << ","
+                       << sample.referencePointMeters.x << ","
+                       << sample.referencePointMeters.y << ","
+                       << sample.referencePointMeters.z << ","
+                       << sample.currentPointMeters.x << ","
+                       << sample.currentPointMeters.y << ","
+                       << sample.currentPointMeters.z << ","
+                       << sample.
+                          referenceDepthUncertaintyStdMeters << ","
+                       << sample.
+                          currentDepthUncertaintyStdMeters << ","
+                       << sample.
+                          referenceDepthNeighborhoodValidWeight << ","
+                       << sample.
+                          currentDepthNeighborhoodValidWeight << ","
+                       << sample.validNeighborCount << ","
+                       << sample.
+                          incidentAbsoluteStrainMedianMeters << ","
+                       << sample.
+                          incidentAbsoluteStrainP90Meters << ","
+                       << sample.incidentRelativeStrainMedian << ","
+                       << sample.incidentRelativeStrainP90 << ","
+                       << sample.
+                          incidentUncertaintyNormalizedStrainMedian
+                       << ","
+                       << sample.
+                          incidentUncertaintyNormalizedStrainP90
+                       << ","
+                       << GeometricDynamicDetector::
+                          RigidityNodeStateName(sample.state)
+                       << "\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-4F3] saved "
+                 << mvGeometryLocalRigidityNodeDiagnostics.size()
+                 << " local-rigidity node rows to "
+                 << mGeometryLocalRigidityCsvPath << endl;
+        }
+    }
+
+    if(!mGeometryLocalRigidityCsvPath.empty() &&
+       !mvGeometryLocalRigidityEdgeDiagnostics.empty())
+    {
+        const std::string edgeCsvPath =
+            mGeometryLocalRigidityCsvPath+".edges.csv";
+        ofstream stream(edgeCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-4F3] failed to open local-rigidity "
+                 << "edge CSV: " << edgeCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,reference_frame,"
+                << "reference_timestamp,dt_seconds,"
+                << "feature_index_a,feature_index_b,"
+                << "reference_distance_m,current_distance_m,"
+                << "absolute_strain_m,relative_strain,"
+                << "delta_length_uncertainty_std_m,"
+                << "uncertainty_normalized_strain,"
+                << "flow_residual_a_px,flow_residual_b_px,"
+                << "forward_backward_error_a_px,"
+                << "forward_backward_error_b_px,"
+                << "has_mappoint_a,has_mappoint_b,"
+                << "semantic_nonzero_a,semantic_nonzero_b,"
+                << "dynamic_decision,"
+                << "direct_slam_state_mutation\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometryLocalRigidityEdgeDiagnostics.size();
+                ++index)
+            {
+                const GeometryLocalRigidityEdgeRecord &record =
+                    mvGeometryLocalRigidityEdgeDiagnostics[index];
+                const GeometricRigidityEdgeSample &sample =
+                    record.sample;
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.referenceFrameId << ","
+                       << record.referenceTimestamp << ","
+                       << record.timestamp-
+                          record.referenceTimestamp << ","
+                       << sample.featureIndexA << ","
+                       << sample.featureIndexB << ","
+                       << sample.referenceDistanceMeters << ","
+                       << sample.currentDistanceMeters << ","
+                       << sample.absoluteStrainMeters << ","
+                       << sample.relativeStrain << ","
+                       << sample.deltaLengthUncertaintyStdMeters
+                       << ","
+                       << sample.uncertaintyNormalizedStrain
+                       << ","
+                       << sample.flowResidualMagnitudePixelsA
+                       << ","
+                       << sample.flowResidualMagnitudePixelsB
+                       << ","
+                       << sample.forwardBackwardErrorPixelsA
+                       << ","
+                       << sample.forwardBackwardErrorPixelsB
+                       << ","
+                       << (record.hasMapPointA ? 1 : 0) << ","
+                       << (record.hasMapPointB ? 1 : 0) << ","
+                       << (record.semanticNonzeroA ? 1 : 0)
+                       << ","
+                       << (record.semanticNonzeroB ? 1 : 0)
+                       << ",none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-4F3] saved "
+                 << mvGeometryLocalRigidityEdgeDiagnostics.size()
+                 << " local-rigidity edge rows to "
+                 << edgeCsvPath << endl;
+        }
+    }
+
+    if(!mGeometryLocalRigidityCsvPath.empty() &&
+       !mvGeometryLocalRigidityFrameDiagnostics.empty())
+    {
+        const std::string frameCsvPath =
+            mGeometryLocalRigidityCsvPath+".frames.csv";
+        ofstream stream(frameCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-4F3] failed to open local-rigidity "
+                 << "frame CSV: " << frameCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,reference_frame,"
+                << "reference_timestamp,dt_seconds,"
+                << "reference_available,domain_valid,input_features,"
+                << "sparse_flow_measured,fb_rejected,"
+                << "semantic_excluded,current_depth_invalid,"
+                << "uncertainty_invalid,"
+                << "outside_image,duplicate_image_point,"
+                << "eligible_nodes,nodes_with_edges,valid_edges,"
+                << "uncertainty_normalized_edges,"
+                << "uncertainty_floor_uses,"
+                << "axial_depth_noise_coefficient_per_m,"
+                << "uncertainty_denominator_floor_m,"
+                << "graph_ms,metric_ms,total_ms,"
+                << "dynamic_decision,"
+                << "direct_slam_state_mutation\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometryLocalRigidityFrameDiagnostics.size();
+                ++index)
+            {
+                const GeometryLocalRigidityFrameRecord &record =
+                    mvGeometryLocalRigidityFrameDiagnostics[index];
+                const GeometricRigidityStats &stats =
+                    record.stats;
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.referenceFrameId << ","
+                       << record.referenceTimestamp << ","
+                       << record.timestamp-
+                          record.referenceTimestamp << ","
+                       << (record.referenceAvailable ? 1 : 0)
+                       << ","
+                       << (record.domainValid ? 1 : 0) << ","
+                       << stats.inputFeatureCount << ","
+                       << stats.sparseFlowMeasuredCount << ","
+                       << stats.forwardBackwardRejectedCount << ","
+                       << stats.semanticExcludedCount << ","
+                       << stats.currentDepthInvalidCount << ","
+                       << stats.uncertaintyInvalidCount << ","
+                       << stats.outsideImageCount << ","
+                       << stats.duplicateImagePointCount << ","
+                       << stats.eligibleNodeCount << ","
+                       << stats.nodeWithEdgeCount << ","
+                       << stats.validEdgeCount << ","
+                       << stats.uncertaintyNormalizedEdgeCount
+                       << ","
+                       << stats.uncertaintyFloorUseCount << ","
+                       << stats.axialDepthNoiseCoefficientPerMeter
+                       << ","
+                       << stats.uncertaintyDenominatorFloorMeters
+                       << ","
+                       << stats.graphMs << ","
+                       << stats.metricMs << ","
+                       << stats.totalMs
+                       << ",none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-4F3] saved "
+                 << mvGeometryLocalRigidityFrameDiagnostics.size()
+                 << " local-rigidity frame rows to "
+                 << frameCsvPath << endl;
+        }
+    }
+
     if(!mGeometryRegionEvidenceCsvPath.empty() &&
        !mvGeometryRegionEvidenceDiagnostics.empty())
     {
@@ -2356,6 +2637,41 @@ void Tracking::RunSparseEgoFlowShadow()
         }
     }
 
+    GeometricRigidityResult rigidityResult;
+    if(mbGeometryLocalRigidityShadowEnabled)
+    {
+        if(referenceAvailable && domainValid &&
+           mCurrentDepthMeters.type()==CV_32FC1 &&
+           mCurrentDepthMeters.size()==mImGray.size())
+        {
+            rigidityResult =
+                GeometricDynamicDetector::ComputeLocalRigidity(
+                    mSparseFlowReference.depthMeters,
+                    mCurrentDepthMeters,mGeometryK,result,
+                    mCurrentFrame.mvbSemanticDynamic);
+        }
+        else
+        {
+            rigidityResult.stats.inputFeatureCount =
+                result.samples.size();
+            rigidityResult.nodes.resize(
+                result.samples.size());
+            for(std::size_t index=0;
+                index<result.samples.size(); ++index)
+            {
+                rigidityResult.nodes[index].featureIndex =
+                    result.samples[index].featureIndex;
+                rigidityResult.nodes[index].currentPixel =
+                    result.samples[index].currentPixel;
+                rigidityResult.nodes[index].referencePixel =
+                    result.samples[index].referencePixel;
+                rigidityResult.nodes[index].state =
+                    GeometricRigidityNodeState::
+                        SparseFlowInvalid;
+            }
+        }
+    }
+
     const bool recordFeatures =
         !mGeometrySparseFlowCsvPath.empty() &&
         (mGeometrySparseFlowFrameFilter.empty() ||
@@ -2391,6 +2707,81 @@ void Tracking::RunSparseEgoFlowShadow()
                 record);
         }
     }
+
+    const bool recordRigidity =
+        mbGeometryLocalRigidityShadowEnabled &&
+        !mGeometryLocalRigidityCsvPath.empty() &&
+        (mGeometryLocalRigidityFrameFilter.empty() ||
+         mGeometryLocalRigidityFrameFilter.count(
+             mCurrentFrame.mnId)>0);
+    if(recordRigidity)
+    {
+        for(std::size_t index=0;
+            index<rigidityResult.nodes.size(); ++index)
+        {
+            const GeometricRigidityNodeSample &sample =
+                rigidityResult.nodes[index];
+            const std::size_t featureIndex =
+                sample.featureIndex;
+            GeometryLocalRigidityNodeRecord record;
+            record.frameId = mCurrentFrame.mnId;
+            record.timestamp = mCurrentFrame.mTimeStamp;
+            record.referenceFrameId =
+                referenceAvailable
+                ? mSparseFlowReference.frameId : 0;
+            record.referenceTimestamp =
+                referenceAvailable
+                ? mSparseFlowReference.timestamp : 0.0;
+            record.octave =
+                featureIndex<mCurrentFrame.mvKeys.size()
+                ? mCurrentFrame.mvKeys[featureIndex].octave : -1;
+            record.hasMapPoint =
+                featureIndex<mCurrentFrame.mvpMapPoints.size() &&
+                mCurrentFrame.mvpMapPoints[featureIndex]!=NULL;
+            record.semanticNonzero =
+                featureIndex<
+                    mCurrentFrame.mvbSemanticDynamic.size() &&
+                mCurrentFrame.mvbSemanticDynamic[
+                    featureIndex]!=0;
+            record.sample = sample;
+            mvGeometryLocalRigidityNodeDiagnostics.push_back(
+                record);
+        }
+        for(std::size_t index=0;
+            index<rigidityResult.edges.size(); ++index)
+        {
+            GeometryLocalRigidityEdgeRecord record;
+            record.frameId = mCurrentFrame.mnId;
+            record.timestamp = mCurrentFrame.mTimeStamp;
+            record.referenceFrameId =
+                referenceAvailable
+                ? mSparseFlowReference.frameId : 0;
+            record.referenceTimestamp =
+                referenceAvailable
+                ? mSparseFlowReference.timestamp : 0.0;
+            record.sample = rigidityResult.edges[index];
+            const std::size_t featureA =
+                record.sample.featureIndexA;
+            const std::size_t featureB =
+                record.sample.featureIndexB;
+            record.hasMapPointA =
+                featureA<mCurrentFrame.mvpMapPoints.size() &&
+                mCurrentFrame.mvpMapPoints[featureA]!=NULL;
+            record.hasMapPointB =
+                featureB<mCurrentFrame.mvpMapPoints.size() &&
+                mCurrentFrame.mvpMapPoints[featureB]!=NULL;
+            record.semanticNonzeroA =
+                featureA<
+                    mCurrentFrame.mvbSemanticDynamic.size() &&
+                mCurrentFrame.mvbSemanticDynamic[featureA]!=0;
+            record.semanticNonzeroB =
+                featureB<
+                    mCurrentFrame.mvbSemanticDynamic.size() &&
+                mCurrentFrame.mvbSemanticDynamic[featureB]!=0;
+            mvGeometryLocalRigidityEdgeDiagnostics.push_back(
+                record);
+        }
+    }
     const double recordMs =
         std::chrono::duration<double,std::milli>(
             std::chrono::steady_clock::now()-recordStart).count();
@@ -2415,6 +2806,24 @@ void Tracking::RunSparseEgoFlowShadow()
         frameRecord.activeTotalMs = activeTotalMs;
         frameRecord.stats = result.stats;
         mvGeometrySparseFlowFrameDiagnostics.push_back(
+            frameRecord);
+    }
+    if(mbGeometryLocalRigidityShadowEnabled &&
+       !mGeometryLocalRigidityCsvPath.empty())
+    {
+        GeometryLocalRigidityFrameRecord frameRecord;
+        frameRecord.frameId = mCurrentFrame.mnId;
+        frameRecord.timestamp = mCurrentFrame.mTimeStamp;
+        frameRecord.referenceFrameId =
+            referenceAvailable
+            ? mSparseFlowReference.frameId : 0;
+        frameRecord.referenceTimestamp =
+            referenceAvailable
+            ? mSparseFlowReference.timestamp : 0.0;
+        frameRecord.referenceAvailable = referenceAvailable;
+        frameRecord.domainValid = domainValid;
+        frameRecord.stats = rigidityResult.stats;
+        mvGeometryLocalRigidityFrameDiagnostics.push_back(
             frameRecord);
     }
 
@@ -2452,6 +2861,32 @@ void Tracking::RunSparseEgoFlowShadow()
              << " dynamic_decision=none"
              << " direct_slam_state_mutation=none"
              << endl;
+    }
+    if(mbGeometryLocalRigidityShadowEnabled)
+    {
+        ++mnGeometryLocalRigidityComputedFrames;
+        if(mnGeometryLocalRigidityComputedFrames==1 ||
+           mnGeometryLocalRigidityComputedFrames%
+               static_cast<long unsigned int>(
+                   mnGeometryLogEveryN)==0)
+        {
+            cout << "[Geometry G2-4F3] frame="
+                 << mCurrentFrame.mnId
+                 << " eligible_nodes="
+                 << rigidityResult.stats.eligibleNodeCount
+                 << " nodes_with_edges="
+                 << rigidityResult.stats.nodeWithEdgeCount
+                 << " edges="
+                 << rigidityResult.stats.validEdgeCount
+                 << " duplicate_nodes="
+                 << rigidityResult.stats.
+                    duplicateImagePointCount
+                 << " total_ms="
+                 << rigidityResult.stats.totalMs
+                 << " dynamic_decision=none"
+                 << " direct_slam_state_mutation=none"
+                 << endl;
+        }
     }
 }
 
@@ -5388,6 +5823,9 @@ void Tracking::Reset()
     mvGeometryMultiReferenceFeatureDiagnostics.clear();
     mvGeometrySparseFlowFeatureDiagnostics.clear();
     mvGeometrySparseFlowFrameDiagnostics.clear();
+    mvGeometryLocalRigidityNodeDiagnostics.clear();
+    mvGeometryLocalRigidityEdgeDiagnostics.clear();
+    mvGeometryLocalRigidityFrameDiagnostics.clear();
     mvGeometryRegionEvidenceDiagnostics.clear();
     mvGeometryReferenceSelectionDiagnostics.clear();
     mqGeometryKeyframeReferences.clear();
@@ -5399,6 +5837,7 @@ void Tracking::Reset()
     mnGeometryComputedFrames = 0;
     mnGeometryMultiReferenceComputedFrames = 0;
     mnGeometrySparseFlowComputedFrames = 0;
+    mnGeometryLocalRigidityComputedFrames = 0;
     mnGeometryRegionEvidenceComputedFrames = 0;
 
     if(mpInitializer)

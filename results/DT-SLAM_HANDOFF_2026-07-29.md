@@ -848,3 +848,296 @@ G2-4F3 SPEC:
 SInDSLAM/DetectFusion“residual 需要空间上下文”的证据支持。禁止复制完整
 graph optimization、禁止最大组静态假设、禁止修改 Optimizer/g2o、禁止根据
 已打开 holdout 选阈值。
+
+---
+
+## 13. 2026-07-30 G2-4F3 完成状态覆盖更新
+
+本节覆盖前文“F3 尚未实现”的旧描述。
+
+### 13.1 已实现
+
+G2-4F3 已实现 current-image Delaunay 邻接和相邻两帧三维 edge-length
+change，输出连续 node/edge/frame 诊断。它只复用 F1 对应关系，不增加
+PoseOptimization，不修改动态标志、MapPoint、Optimizer、g2o 或后端。
+
+### 13.2 当前证据
+
+```text
+synthetic tests                         PASS
+OpenCV 4.5.4 C++/Python edge parity     2526/2526, exact set match
+Bonn static F3 median/P95               1.984/2.112 ms
+TUM fr1/xyz F3 median/P95               1.902/2.103 ms
+development in-box flow > outside       15/15 comparable frames
+development internal strain <= outside  11/14 comparable frames
+development crossing strain > outside   13/14 comparable frames
+```
+
+代理不是 motion/pixel GT。少数帧节点不足，`balloon2` frame 230 有严重混合
+深度异常；relative strain 也受长边分母影响。因此只是方向性支持，不是动态
+分类器。
+
+### 13.3 当前代码状态
+
+本轮修改尚未提交。新增/修改集中在：
+
+```text
+GeometricDynamicDetector.h/.cc
+Tracking.h/.cc
+geometric_warp_test.cc
+BONN/TUM1 GeometryLocalRigidityShadow YAML
+audit_local_rigidity_shadow.py
+G2-4F3 RESULT、总进度和 HANDOFF
+```
+
+### 13.4 下一步限制
+
+先从本地 PaperNotes/原始 PDF 核对鲁棒 edge consistency、RGB-D 深度噪声和
+图分组依据，再冻结一个只输出连续 edge reliability 的设计。不得：
+
+```text
+读取 balloon_tracking 回调规则
+直接选择 rigidity hard threshold
+建立 dynamic component
+进入 G1-F/G1-D
+修改 YOLO/Optimizer/g2o/后端
+```
+
+---
+
+## 14. 2026-07-30 G2-4F3U 完成状态覆盖更新
+
+本节覆盖前文“下一步设计鲁棒 edge reliability”的旧描述。
+
+### 14.1 已完成
+
+依据 Dai 等 point-correlation 的协方差归一化思想 `[A]` 和 Khoshelham 等
+Kinect 深度误差随距离平方增长的模型 `[L/A]`，实现了一个两帧标量边长变化的
+不确定度归一化连续诊断 `[S/H]`。它不是 Dai 原方法复现。
+
+新增 3x3 深度混合不确定度、边长一阶误差传播、node/edge/frame CSV 和离线
+审计；没有动态阈值、动态 component 或任何 SLAM mutation。
+
+### 14.2 结果与决策
+
+```text
+build + deterministic tests                      PASS
+uncertainty denominator floor                    0 / 131256 static edges
+development internal q <= background             4 / 14
+development crossing q > background              13 / 14
+old absolute internal strain <= background       11 / 14
+measurement implementation                       PASS
+default coherence score                          REJECT
+dynamic_decision / direct_slam_state_mutation     none / none
+G1-F / G1-D                                      locked
+```
+
+轴向不确定度归一化没有改善内部刚体一致性的代理可分性，因此不得选择 hard
+threshold。跨组边仍有方向性，但不足以独立产生动态判决。失败的是本项目的两帧
+标量适配，不是 Dai 的长期点关联图方法。
+
+### 14.3 性能
+
+新增 uncertainty metric 约 `0.53–0.58 ms` median，相对旧 F3 增量约
+`0.16–0.20 ms`。host RTX 4060 Ti 在线同步 YOLO 下：
+
+```text
+balloon   289 frames  actual 28.40 FPS  deadline miss 284/289
+balloon2  393 frames  actual 25.99 FPS  deadline miss 392/393
+```
+
+这是完整 pipeline 性能，不能全归因于 F3U；但 Bonn 上仍没有稳定 30 FPS 余量。
+
+### 14.4 当前下一步限制
+
+先阅读：
+
+```text
+results/g2_4f3u_2026-07-30/G2_4F3U_UNCERTAINTY_NORMALIZED_EDGE_LITERATURE_AUDIT.md
+results/g2_4f3u_2026-07-30/G2_4F3U_UNCERTAINTY_NORMALIZED_EDGE_SHADOW_SPEC.md
+results/g2_4f3u_2026-07-30/G2_4F3U_UNCERTAINTY_NORMALIZED_EDGE_SHADOW_RESULT.md
+```
+
+不得继续在已打开 proxy 上堆叠 edge score 或调阈值。下一项实验必须先给出原始
+文献依据、预注册假设和失败停止条件，并继续保持 shadow-only；否则应暂停这条
+局部刚性分支并重新评估 G2-4 的最小动态判决路线。
+
+---
+
+## 15. 2026-07-30 G2-4F4 区域上下文审计完成状态
+
+### 15.1 路线选择
+
+F3U 之后没有继续堆叠 edge score。先核对本地 PaperNotes 和 DetectFusion /
+SInDSLAM 原始 PDF，比较：
+
+```text
+继续调整 LK/FB
+遮挡/边界 veto
+区域内聚合连续 F1 residual
+```
+
+只批准第三条做最小离线 shadow audit。方法身份是两篇论文“motion residual
+需要独立 geometry segment 上下文”原理的轻量适配 `[A/S/H]`，不是复现。
+
+### 15.2 实验结果
+
+使用冻结的 `balloon/balloon2` RGB-only coarse bbox 和 exact C++ F3U node
+CSV，把 measured nonsemantic F1 residual 映射到 G2-3R0 depth component：
+
+```text
+support >=3 comparable frames             14
+point inside median > background          14/14
+selected region median > background       11/14 = 78.57%
+pre-registered requirement                >=80%
+representation gate                       FAILED
+dynamic_decision / mutation               none / none
+```
+
+失败来自部分 region 跨入大块静态背景。例如 `balloon frame 39` 的所选区域中
+只有 `6/610` 个 eligible feature 在粗框内；点级 inside/background 仍为约
+`20×`，整区聚合却降到 `0.884×`。
+
+### 15.3 决策
+
+停止当前轻量 depth-component 容器：
+
+```text
+不改 region selector
+不调 residual / region threshold
+不做 online F4
+不进入 G1-F/G1-D
+```
+
+保留 F1 continuous residual；被否定的是“G2-3R0 component 可直接作为运动
+对象聚合单位”。下一步需要在“实现更完整且较重的文献 re-clustering 子集”与
+“回到 feature-level continuous evidence 并重新设计独立验证/fail-safe”之间
+做总路线决策，不能自动继续加方法。
+
+详细记录：
+
+```text
+results/g2_4f4_2026-07-30/G2_4F4_REGION_CONTEXT_LITERATURE_DECISION.md
+results/g2_4f4_2026-07-30/G2_4F4_REGION_CONTEXT_SHADOW_SPEC.md
+results/g2_4f4_2026-07-30/G2_4F4_REGION_CONTEXT_SHADOW_RESULT.md
+```
+
+## 16. 2026-07-30 运动分组输入审计与下一路线覆盖更新
+
+本节覆盖 15.3 中仍未决的“更强区域还是 feature fail-safe”。
+
+### 16.1 输入审计结论
+
+新增只读工具：
+
+```text
+DT-SLAM/tools/audit_motion_grouping_track_support.py
+```
+
+在冻结 development `balloon/balloon2` 上，代理内 MapPoint 只占
+`10.53%/3.28%`；三图像中仍有至少 3 个轨迹的帧均为 `4`，六图像时均只剩
+`2`。因此不批准固定 3/5 帧 persistence 或 MapPoint long-track clustering。
+
+### 16.2 文献决策
+
+原文核对后确认：
+
+- Dai 前端虽使用两帧，但还依赖 tracked MapPoint、point-correlation
+  optimization、Mahalanobis edge culling、CC 和最大体积静态组；
+- 将其改为 transient LK nodes 不是小改动；
+- Tateno/DetectFusion normal+distance segment 可支持低纹理和 `M_depth`，
+  但 segment 本身不判断运动；
+- DetectFusion 的未知动态仍依赖 static surfel-map ICP residual。
+
+因此下一项冻结为：
+
+```text
+G2-4R1 offline normal+distance geometric-segment representation audit
+```
+
+它不得修改 `Tracking`/`GeometricDynamicDetector`，不得读取 residual 生成
+segment，不得开放 G1。
+
+### 16.3 当前下一步
+
+按已冻结 SPEC 实现：
+
+```text
+DT-SLAM/tools/audit_normal_distance_segments.py
+```
+
+并与 G2-3R0 在同一 development 帧上做成对 representation audit。详细依据：
+
+```text
+results/g2_4_motion_grouping_2026-07-30/
+  G2_4_MOTION_GROUPING_INPUT_FEASIBILITY_RESULT.md
+  G2_4_MOTION_GROUPING_ROUTE_DECISION.md
+  G2_4R1_NORMAL_DISTANCE_SEGMENTATION_SHADOW_SPEC.md
+```
+
+继续禁止：
+
+```text
+dynamic_decision
+mvbDynamic / mvpMapPoints mutation
+G1-F / G1-D
+Optimizer / g2o / backend modification
+third PoseOptimization
+```
+
+## 17. 2026-07-30 G2-4R1 完成状态覆盖更新
+
+本节覆盖 16.3 的“下一步实现 G2-4R1”。
+
+### 17.1 实现与输入纠正
+
+已新增：
+
+```text
+DT-SLAM/tools/audit_normal_distance_segments.py
+```
+
+实现 frame-wise Tateno-style bilateral depth、vertex/normal、
+concavity edge、Nguyen-noise point-to-plane distance edge 和 connected
+components，并与 G2-3R0 做相同 depth 的配对审计。
+
+正式输入使用 F1 `*_f1_features.csv` 的全部 `evidence_state=measured`
+节点；没有误用带 F3U 邻域支持条件的子集。bbox/residual 不参与 segment
+生成或参数选择。
+
+### 17.2 结果
+
+```text
+Bonn candidate frames                         17
+normal regions median balloon/balloon2        2487 / 2669
+small-region fraction median                  94.51% / 94.98%
+best single-region bbox coverage combined     0.488 median
+all segments can cover 80% bbox-valid depth   1 / 17
+selected residual > background                14 / 14 comparable
+fr1/xyz static region count                   406 median
+deterministic replay                          PASS
+```
+
+normal+distance 表示把大型背景切开并留下纯净目标片段，但目标有效深度大量落入
+boundary/unknown，且整体严重碎裂。按预注册条件冻结为负结果，不允许在已打开
+proxy 上调 noise/bilateral/merge/area/residual 参数。
+
+### 17.3 当前状态
+
+```text
+G2-4R1 frame-wise adaptation       stopped
+full Tateno / DetectFusion         not implemented, not rejected
+dynamic_decision                  none
+direct SLAM mutation              none
+G1-F / G1-D                       locked
+```
+
+下一步必须先做有原始文献依据的轻量多 feature 运动一致性分组可行性审计；若
+现有短轨迹支持不足，则应明确暂停，而不是继续发明阈值。
+
+详细记录：
+
+```text
+results/g2_4r1_2026-07-30/
+  G2_4R1_NORMAL_DISTANCE_SEGMENTATION_SHADOW_RESULT.md
+```

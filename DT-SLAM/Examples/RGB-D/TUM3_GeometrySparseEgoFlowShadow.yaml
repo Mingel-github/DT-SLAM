@@ -33,6 +33,7 @@ Geometry.Enable: 1
 Geometry.SingleReferenceShadowEnable: 0
 Geometry.MultiReferenceShadowEnable: 0
 Geometry.SparseEgoFlowShadowEnable: 1
+Geometry.LocalRigidityShadowEnable: 0
 Geometry.LogEveryN: 30
 Geometry.ResidualThresholdM: 0.10
 Geometry.RegionGrowEnable: 0

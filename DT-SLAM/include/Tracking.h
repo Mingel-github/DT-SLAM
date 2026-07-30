@@ -333,6 +333,13 @@ protected:
     std::set<long unsigned int> mGeometrySparseFlowFrameFilter;
     long unsigned int mnGeometrySparseFlowComputedFrames;
 
+    // G2-4F3 adjacent-frame local 3-D edge-length consistency.
+    // Shadow-only: no rigidity threshold, motion class, or SLAM mutation.
+    bool mbGeometryLocalRigidityShadowEnabled;
+    std::string mGeometryLocalRigidityCsvPath;
+    std::set<long unsigned int> mGeometryLocalRigidityFrameFilter;
+    long unsigned int mnGeometryLocalRigidityComputedFrames;
+
     struct SparseFlowReference
     {
         cv::Mat gray;
@@ -373,6 +380,48 @@ protected:
     };
     std::vector<GeometrySparseFlowFrameRecord>
         mvGeometrySparseFlowFrameDiagnostics;
+
+    struct GeometryLocalRigidityNodeRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        long unsigned int referenceFrameId;
+        double referenceTimestamp;
+        int octave;
+        bool hasMapPoint;
+        bool semanticNonzero;
+        GeometricRigidityNodeSample sample;
+    };
+    std::vector<GeometryLocalRigidityNodeRecord>
+        mvGeometryLocalRigidityNodeDiagnostics;
+
+    struct GeometryLocalRigidityEdgeRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        long unsigned int referenceFrameId;
+        double referenceTimestamp;
+        bool hasMapPointA;
+        bool hasMapPointB;
+        bool semanticNonzeroA;
+        bool semanticNonzeroB;
+        GeometricRigidityEdgeSample sample;
+    };
+    std::vector<GeometryLocalRigidityEdgeRecord>
+        mvGeometryLocalRigidityEdgeDiagnostics;
+
+    struct GeometryLocalRigidityFrameRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        long unsigned int referenceFrameId;
+        double referenceTimestamp;
+        bool referenceAvailable;
+        bool domainValid;
+        GeometricRigidityStats stats;
+    };
+    std::vector<GeometryLocalRigidityFrameRecord>
+        mvGeometryLocalRigidityFrameDiagnostics;
 
     // G2-3R1 fixed-region evidence distributions. Shadow-only.
     bool mbGeometryRegionEvidenceShadowEnabled;

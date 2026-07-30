@@ -13,6 +13,8 @@
 #include <cmath>
 #include <deque>
 #include <limits>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -58,6 +60,133 @@ void ValidateCameraMatrix(const cv::Mat &K)
 bool IsValidDepth(const float depth)
 {
     return std::isfinite(depth) && depth>0.0f;
+}
+
+cv::Point3f BackProjectPoint(
+    const cv::Point2f &pixel,
+    const float depthMeters,
+    const cv::Mat &K)
+{
+    const float fx = K.at<float>(0,0);
+    const float fy = K.at<float>(1,1);
+    const float cx = K.at<float>(0,2);
+    const float cy = K.at<float>(1,2);
+    return cv::Point3f(
+        (pixel.x-cx)*depthMeters/fx,
+        (pixel.y-cy)*depthMeters/fy,
+        depthMeters);
+}
+
+struct AxialDepthUncertainty
+{
+    float meanMeters = 0.0f;
+    float standardDeviationMeters = 0.0f;
+    float validWeight = 0.0f;
+    bool valid = false;
+};
+
+AxialDepthUncertainty ComputeAxialDepthUncertainty(
+    const cv::Mat &depthMeters,
+    const cv::Point2f &pixel,
+    const float axialDepthNoiseCoefficientPerMeter)
+{
+    static const int weights[3][3] = {
+        {1,2,1},
+        {2,4,2},
+        {1,2,1}
+    };
+    const int centerU = cvRound(pixel.x);
+    const int centerV = cvRound(pixel.y);
+    AxialDepthUncertainty uncertainty;
+    if(centerU<0 || centerV<0 ||
+       centerU>=depthMeters.cols || centerV>=depthMeters.rows ||
+       !IsValidDepth(depthMeters.at<float>(centerV,centerU)))
+    {
+        return uncertainty;
+    }
+
+    double validWeight = 0.0;
+    double weightedMean = 0.0;
+    double weightedSecondMoment = 0.0;
+    for(int offsetV=-1; offsetV<=1; ++offsetV)
+    {
+        for(int offsetU=-1; offsetU<=1; ++offsetU)
+        {
+            const int u = centerU+offsetU;
+            const int v = centerV+offsetV;
+            if(u<0 || v<0 || u>=depthMeters.cols ||
+               v>=depthMeters.rows)
+            {
+                continue;
+            }
+            const float depth = depthMeters.at<float>(v,u);
+            if(!IsValidDepth(depth))
+                continue;
+            const double weight =
+                static_cast<double>(weights[offsetV+1][offsetU+1]);
+            const double standardDeviation =
+                static_cast<double>(
+                    axialDepthNoiseCoefficientPerMeter)*
+                static_cast<double>(depth)*
+                static_cast<double>(depth);
+            validWeight += weight;
+            weightedMean += weight*static_cast<double>(depth);
+            weightedSecondMoment +=
+                weight*(standardDeviation*standardDeviation+
+                        static_cast<double>(depth)*
+                        static_cast<double>(depth));
+        }
+    }
+    if(validWeight<=0.0)
+        return uncertainty;
+
+    const double mean = weightedMean/validWeight;
+    const double variance = std::max(
+        0.0,weightedSecondMoment/validWeight-mean*mean);
+    uncertainty.meanMeters = static_cast<float>(mean);
+    uncertainty.standardDeviationMeters =
+        static_cast<float>(std::sqrt(variance));
+    uncertainty.validWeight =
+        static_cast<float>(validWeight/16.0);
+    uncertainty.valid =
+        std::isfinite(uncertainty.standardDeviationMeters) &&
+        uncertainty.standardDeviationMeters>0.0f;
+    return uncertainty;
+}
+
+float EdgeLengthAxialVariance(
+    const cv::Point3f &firstPoint,
+    const cv::Point3f &secondPoint,
+    const cv::Point2f &firstPixel,
+    const cv::Point2f &secondPixel,
+    const float firstDepthStandardDeviationMeters,
+    const float secondDepthStandardDeviationMeters,
+    const cv::Mat &K)
+{
+    const cv::Point3f edge = firstPoint-secondPoint;
+    const float distance = cv::norm(edge);
+    if(!std::isfinite(distance) || distance<=0.0f)
+        return std::numeric_limits<float>::quiet_NaN();
+    const cv::Point3f direction = edge*(1.0f/distance);
+    const float fx = K.at<float>(0,0);
+    const float fy = K.at<float>(1,1);
+    const float cx = K.at<float>(0,2);
+    const float cy = K.at<float>(1,2);
+    const cv::Point3f firstRay(
+        (firstPixel.x-cx)/fx,(firstPixel.y-cy)/fy,1.0f);
+    const cv::Point3f secondRay(
+        (secondPixel.x-cx)/fx,(secondPixel.y-cy)/fy,1.0f);
+    const float firstJacobian = direction.dot(firstRay);
+    const float secondJacobian = -direction.dot(secondRay);
+    const float variance =
+        firstJacobian*firstJacobian*
+            firstDepthStandardDeviationMeters*
+            firstDepthStandardDeviationMeters+
+        secondJacobian*secondJacobian*
+            secondDepthStandardDeviationMeters*
+            secondDepthStandardDeviationMeters;
+    return std::isfinite(variance) && variance>=0.0f
+        ? variance : std::numeric_limits<float>::quiet_NaN();
 }
 
 void ValidateGrayImage(const cv::Mat &image, const char *name)
@@ -1914,6 +2043,463 @@ const char *GeometricDynamicDetector::SparseFlowEvidenceStateName(
         return "reference_unavailable";
     }
     return "reference_unavailable";
+}
+
+GeometricRigidityResult
+GeometricDynamicDetector::ComputeLocalRigidity(
+    const cv::Mat &referenceDepthMeters,
+    const cv::Mat &currentDepthMeters,
+    const cv::Mat &K,
+    const GeometricSparseFlowResult &sparseFlow,
+    const std::vector<unsigned char> &semanticDynamic,
+    const float maximumForwardBackwardErrorPixels,
+    const float relativeDenominatorFloorMeters,
+    const float axialDepthNoiseCoefficientPerMeter,
+    const float uncertaintyDenominatorFloorMeters)
+{
+    ValidateDepth(referenceDepthMeters,"rigidity reference depth");
+    ValidateDepth(currentDepthMeters,"rigidity current depth");
+    if(referenceDepthMeters.size()!=currentDepthMeters.size())
+    {
+        throw std::invalid_argument(
+            "rigidity reference/current depth sizes must match");
+    }
+    ValidateCameraMatrix(K);
+    if(!cv::checkRange(K))
+        throw std::invalid_argument("rigidity K must contain finite values");
+    if(!semanticDynamic.empty() &&
+       semanticDynamic.size()!=sparseFlow.samples.size())
+    {
+        throw std::invalid_argument(
+            "rigidity semantic flags must match sparse-flow samples");
+    }
+    if(!std::isfinite(maximumForwardBackwardErrorPixels) ||
+       maximumForwardBackwardErrorPixels<0.0f ||
+       !std::isfinite(relativeDenominatorFloorMeters) ||
+       relativeDenominatorFloorMeters<=0.0f ||
+       !std::isfinite(axialDepthNoiseCoefficientPerMeter) ||
+       axialDepthNoiseCoefficientPerMeter<=0.0f ||
+       !std::isfinite(uncertaintyDenominatorFloorMeters) ||
+       uncertaintyDenominatorFloorMeters<=0.0f)
+    {
+        throw std::invalid_argument(
+            "rigidity numeric safeguards must be finite and positive");
+    }
+
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+    GeometricRigidityResult result;
+    result.stats.axialDepthNoiseCoefficientPerMeter =
+        axialDepthNoiseCoefficientPerMeter;
+    result.stats.uncertaintyDenominatorFloorMeters =
+        uncertaintyDenominatorFloorMeters;
+    result.stats.inputFeatureCount = sparseFlow.samples.size();
+    result.nodes.resize(sparseFlow.samples.size());
+    const cv::Mat camera = AsFloatMatrix(K);
+
+    std::vector<std::size_t> graphCandidates;
+    graphCandidates.reserve(sparseFlow.samples.size());
+    for(std::size_t index=0;
+        index<sparseFlow.samples.size(); ++index)
+    {
+        const GeometricSparseFlowSample &flow =
+            sparseFlow.samples[index];
+        GeometricRigidityNodeSample &node = result.nodes[index];
+        node.featureIndex = flow.featureIndex;
+        node.currentPixel = flow.currentPixel;
+        node.referencePixel = flow.referencePixel;
+        node.forwardBackwardErrorPixels =
+            flow.forwardBackwardErrorPixels;
+        node.flowResidualMagnitudePixels =
+            flow.slamResidualMagnitudePixels;
+
+        if(flow.evidenceState!=
+               GeometricSparseFlowEvidenceState::Measured ||
+           !flow.referenceDepthValid)
+        {
+            node.state =
+                GeometricRigidityNodeState::SparseFlowInvalid;
+            continue;
+        }
+        ++result.stats.sparseFlowMeasuredCount;
+        if(flow.forwardBackwardErrorPixels>
+               maximumForwardBackwardErrorPixels)
+        {
+            node.state =
+                GeometricRigidityNodeState::
+                    ForwardBackwardRejected;
+            ++result.stats.forwardBackwardRejectedCount;
+            continue;
+        }
+        if(!semanticDynamic.empty() &&
+           semanticDynamic[index]!=0)
+        {
+            node.state =
+                GeometricRigidityNodeState::SemanticExcluded;
+            ++result.stats.semanticExcludedCount;
+            continue;
+        }
+
+        const int currentU = cvRound(flow.currentPixel.x);
+        const int currentV = cvRound(flow.currentPixel.y);
+        if(currentU<0 || currentV<0 ||
+           currentU>=currentDepthMeters.cols ||
+           currentV>=currentDepthMeters.rows)
+        {
+            node.state =
+                GeometricRigidityNodeState::OutsideImage;
+            ++result.stats.outsideImageCount;
+            continue;
+        }
+        const float currentDepth =
+            currentDepthMeters.at<float>(currentV,currentU);
+        if(!IsValidDepth(currentDepth))
+        {
+            node.state =
+                GeometricRigidityNodeState::
+                    CurrentDepthInvalid;
+            ++result.stats.currentDepthInvalidCount;
+            continue;
+        }
+
+        node.referencePointMeters =
+            BackProjectPoint(
+                flow.referencePixel,
+                flow.referenceDepthMeters,camera);
+        node.currentPointMeters =
+            BackProjectPoint(
+                flow.currentPixel,currentDepth,camera);
+        const AxialDepthUncertainty referenceUncertainty =
+            ComputeAxialDepthUncertainty(
+                referenceDepthMeters,flow.referencePixel,
+                axialDepthNoiseCoefficientPerMeter);
+        const AxialDepthUncertainty currentUncertainty =
+            ComputeAxialDepthUncertainty(
+                currentDepthMeters,flow.currentPixel,
+                axialDepthNoiseCoefficientPerMeter);
+        if(!referenceUncertainty.valid || !currentUncertainty.valid)
+        {
+            node.state =
+                GeometricRigidityNodeState::UncertaintyInvalid;
+            ++result.stats.uncertaintyInvalidCount;
+            continue;
+        }
+        node.referenceDepthUncertaintyStdMeters =
+            referenceUncertainty.standardDeviationMeters;
+        node.currentDepthUncertaintyStdMeters =
+            currentUncertainty.standardDeviationMeters;
+        node.referenceDepthNeighborhoodValidWeight =
+            referenceUncertainty.validWeight;
+        node.currentDepthNeighborhoodValidWeight =
+            currentUncertainty.validWeight;
+        node.state = GeometricRigidityNodeState::Measured;
+        graphCandidates.push_back(index);
+    }
+
+    const std::chrono::steady_clock::time_point graphStart =
+        std::chrono::steady_clock::now();
+    cv::Subdiv2D subdivision(
+        cv::Rect(
+            0,0,currentDepthMeters.cols,currentDepthMeters.rows));
+    std::map<int,std::size_t> featureByVertex;
+    // ORB pyramid coordinates can differ only by floating-point round-off
+    // (observed around 1e-5 px). Keeping both creates nearly zero-length
+    // Delaunay edges. This is a numerical de-duplication tolerance, not a
+    // motion or rigidity threshold.
+    const float duplicatePointTolerancePixels = 1e-3f;
+    std::map<
+        std::pair<int,int>,
+        std::vector<std::size_t> > acceptedCoordinateCells;
+    for(std::size_t candidateIndex=0;
+        candidateIndex<graphCandidates.size(); ++candidateIndex)
+    {
+        const std::size_t sampleIndex =
+            graphCandidates[candidateIndex];
+        GeometricRigidityNodeSample &node =
+            result.nodes[sampleIndex];
+        const int cellX = static_cast<int>(
+            std::floor(
+                node.currentPixel.x/
+                duplicatePointTolerancePixels));
+        const int cellY = static_cast<int>(
+            std::floor(
+                node.currentPixel.y/
+                duplicatePointTolerancePixels));
+        bool nearDuplicate = false;
+        for(int offsetY=-1;
+            offsetY<=1 && !nearDuplicate; ++offsetY)
+        {
+            for(int offsetX=-1;
+                offsetX<=1 && !nearDuplicate; ++offsetX)
+            {
+                const std::map<
+                    std::pair<int,int>,
+                    std::vector<std::size_t> >::const_iterator
+                    cellIt =
+                        acceptedCoordinateCells.find(
+                            std::make_pair(
+                                cellX+offsetX,
+                                cellY+offsetY));
+                if(cellIt==acceptedCoordinateCells.end())
+                    continue;
+                for(std::size_t nearbyIndex=0;
+                    nearbyIndex<cellIt->second.size();
+                    ++nearbyIndex)
+                {
+                    if(cv::norm(
+                           node.currentPixel-
+                           result.nodes[
+                               cellIt->second[nearbyIndex]].
+                                   currentPixel)<=
+                       duplicatePointTolerancePixels)
+                    {
+                        nearDuplicate = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if(nearDuplicate)
+        {
+            node.state =
+                GeometricRigidityNodeState::
+                    DuplicateImagePoint;
+            ++result.stats.duplicateImagePointCount;
+            continue;
+        }
+        int vertexId = -1;
+        try
+        {
+            vertexId = subdivision.insert(node.currentPixel);
+        }
+        catch(const cv::Exception &)
+        {
+            node.state =
+                GeometricRigidityNodeState::OutsideImage;
+            ++result.stats.outsideImageCount;
+            continue;
+        }
+        const std::pair<std::map<int,std::size_t>::iterator,bool>
+            inserted =
+                featureByVertex.insert(
+                    std::make_pair(vertexId,sampleIndex));
+        if(!inserted.second)
+        {
+            node.state =
+                GeometricRigidityNodeState::
+                    DuplicateImagePoint;
+            ++result.stats.duplicateImagePointCount;
+            continue;
+        }
+        acceptedCoordinateCells[
+            std::make_pair(cellX,cellY)].push_back(
+                sampleIndex);
+        ++result.stats.eligibleNodeCount;
+    }
+
+    std::set<std::pair<std::size_t,std::size_t> > uniqueEdges;
+    std::vector<int> leadingEdges;
+    subdivision.getLeadingEdgeList(leadingEdges);
+    for(std::size_t triangleIndex=0;
+        triangleIndex<leadingEdges.size(); ++triangleIndex)
+    {
+        int edge = leadingEdges[triangleIndex];
+        for(int side=0; side<3; ++side)
+        {
+            const int origin = subdivision.edgeOrg(edge);
+            const int destination = subdivision.edgeDst(edge);
+            const std::map<int,std::size_t>::const_iterator
+                originIt = featureByVertex.find(origin);
+            const std::map<int,std::size_t>::const_iterator
+                destinationIt = featureByVertex.find(destination);
+            if(originIt!=featureByVertex.end() &&
+               destinationIt!=featureByVertex.end() &&
+               originIt->second!=destinationIt->second)
+            {
+                const std::size_t first =
+                    std::min(originIt->second,destinationIt->second);
+                const std::size_t second =
+                    std::max(originIt->second,destinationIt->second);
+                uniqueEdges.insert(std::make_pair(first,second));
+            }
+            edge = subdivision.getEdge(
+                edge,cv::Subdiv2D::NEXT_AROUND_LEFT);
+        }
+    }
+    result.stats.graphMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-graphStart).count();
+
+    const std::chrono::steady_clock::time_point metricStart =
+        std::chrono::steady_clock::now();
+    std::vector<std::vector<float> > incidentAbsolute(
+        result.nodes.size());
+    std::vector<std::vector<float> > incidentRelative(
+        result.nodes.size());
+    std::vector<std::vector<float> > incidentUncertaintyNormalized(
+        result.nodes.size());
+    result.edges.reserve(uniqueEdges.size());
+    for(std::set<std::pair<std::size_t,std::size_t> >::
+            const_iterator edgeIt=uniqueEdges.begin();
+        edgeIt!=uniqueEdges.end(); ++edgeIt)
+    {
+        const GeometricRigidityNodeSample &first =
+            result.nodes[edgeIt->first];
+        const GeometricRigidityNodeSample &second =
+            result.nodes[edgeIt->second];
+        const float referenceDistance =
+            cv::norm(
+                first.referencePointMeters-
+                second.referencePointMeters);
+        const float currentDistance =
+            cv::norm(
+                first.currentPointMeters-
+                second.currentPointMeters);
+        if(!std::isfinite(referenceDistance) ||
+           !std::isfinite(currentDistance))
+        {
+            continue;
+        }
+        GeometricRigidityEdgeSample edge;
+        edge.featureIndexA = first.featureIndex;
+        edge.featureIndexB = second.featureIndex;
+        edge.referenceDistanceMeters = referenceDistance;
+        edge.currentDistanceMeters = currentDistance;
+        edge.absoluteStrainMeters =
+            std::abs(currentDistance-referenceDistance);
+        edge.relativeStrain =
+            edge.absoluteStrainMeters/
+            std::max(
+                relativeDenominatorFloorMeters,
+                0.5f*(currentDistance+referenceDistance));
+        const float referenceDistanceVariance =
+            EdgeLengthAxialVariance(
+                first.referencePointMeters,
+                second.referencePointMeters,
+                first.referencePixel,second.referencePixel,
+                first.referenceDepthUncertaintyStdMeters,
+                second.referenceDepthUncertaintyStdMeters,
+                camera);
+        const float currentDistanceVariance =
+            EdgeLengthAxialVariance(
+                first.currentPointMeters,
+                second.currentPointMeters,
+                first.currentPixel,second.currentPixel,
+                first.currentDepthUncertaintyStdMeters,
+                second.currentDepthUncertaintyStdMeters,
+                camera);
+        const float deltaLengthVariance =
+            referenceDistanceVariance+currentDistanceVariance;
+        if(!std::isfinite(deltaLengthVariance) ||
+           deltaLengthVariance<0.0f)
+        {
+            continue;
+        }
+        edge.deltaLengthUncertaintyStdMeters =
+            std::sqrt(deltaLengthVariance);
+        const float uncertaintyDenominator =
+            std::max(
+                uncertaintyDenominatorFloorMeters,
+                edge.deltaLengthUncertaintyStdMeters);
+        if(edge.deltaLengthUncertaintyStdMeters<
+               uncertaintyDenominatorFloorMeters)
+        {
+            ++result.stats.uncertaintyFloorUseCount;
+        }
+        edge.uncertaintyNormalizedStrain =
+            edge.absoluteStrainMeters/uncertaintyDenominator;
+        edge.flowResidualMagnitudePixelsA =
+            first.flowResidualMagnitudePixels;
+        edge.flowResidualMagnitudePixelsB =
+            second.flowResidualMagnitudePixels;
+        edge.forwardBackwardErrorPixelsA =
+            first.forwardBackwardErrorPixels;
+        edge.forwardBackwardErrorPixelsB =
+            second.forwardBackwardErrorPixels;
+        result.edges.push_back(edge);
+        incidentAbsolute[edgeIt->first].push_back(
+            edge.absoluteStrainMeters);
+        incidentAbsolute[edgeIt->second].push_back(
+            edge.absoluteStrainMeters);
+        incidentRelative[edgeIt->first].push_back(
+            edge.relativeStrain);
+        incidentRelative[edgeIt->second].push_back(
+            edge.relativeStrain);
+        incidentUncertaintyNormalized[edgeIt->first].push_back(
+            edge.uncertaintyNormalizedStrain);
+        incidentUncertaintyNormalized[edgeIt->second].push_back(
+            edge.uncertaintyNormalizedStrain);
+        ++result.stats.uncertaintyNormalizedEdgeCount;
+    }
+    result.stats.validEdgeCount = result.edges.size();
+    for(std::size_t index=0; index<result.nodes.size(); ++index)
+    {
+        GeometricRigidityNodeSample &node = result.nodes[index];
+        if(node.state!=GeometricRigidityNodeState::Measured)
+            continue;
+        node.validNeighborCount = incidentAbsolute[index].size();
+        if(node.validNeighborCount==0)
+        {
+            node.state =
+                GeometricRigidityNodeState::NoGraphEdge;
+            continue;
+        }
+        ++result.stats.nodeWithEdgeCount;
+        node.incidentAbsoluteStrainMedianMeters =
+            static_cast<float>(
+                Percentile(incidentAbsolute[index],0.5));
+        node.incidentAbsoluteStrainP90Meters =
+            static_cast<float>(
+                Percentile(incidentAbsolute[index],0.9));
+        node.incidentRelativeStrainMedian =
+            static_cast<float>(
+                Percentile(incidentRelative[index],0.5));
+        node.incidentRelativeStrainP90 =
+            static_cast<float>(
+                Percentile(incidentRelative[index],0.9));
+        node.incidentUncertaintyNormalizedStrainMedian =
+            static_cast<float>(
+                Percentile(
+                    incidentUncertaintyNormalized[index],0.5));
+        node.incidentUncertaintyNormalizedStrainP90 =
+            static_cast<float>(
+                Percentile(
+                    incidentUncertaintyNormalized[index],0.9));
+    }
+    result.stats.metricMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-metricStart).count();
+    result.stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-totalStart).count();
+    return result;
+}
+
+const char *GeometricDynamicDetector::RigidityNodeStateName(
+    const GeometricRigidityNodeState state)
+{
+    switch(state)
+    {
+    case GeometricRigidityNodeState::Measured:
+        return "measured";
+    case GeometricRigidityNodeState::SparseFlowInvalid:
+        return "sparse_flow_invalid";
+    case GeometricRigidityNodeState::ForwardBackwardRejected:
+        return "forward_backward_rejected";
+    case GeometricRigidityNodeState::SemanticExcluded:
+        return "semantic_excluded";
+    case GeometricRigidityNodeState::CurrentDepthInvalid:
+        return "current_depth_invalid";
+    case GeometricRigidityNodeState::UncertaintyInvalid:
+        return "uncertainty_invalid";
+    case GeometricRigidityNodeState::OutsideImage:
+        return "outside_image";
+    case GeometricRigidityNodeState::DuplicateImagePoint:
+        return "duplicate_image_point";
+    case GeometricRigidityNodeState::NoGraphEdge:
+        return "no_graph_edge";
+    }
+    return "sparse_flow_invalid";
 }
 
 GeometricReferenceSelectionResult

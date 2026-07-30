@@ -1,6 +1,6 @@
 %YAML:1.0
 
-# TUM fr1 G2-4F1/F2 static-risk sparse ego-flow instrumentation.
+# TUM fr1 G2-4F3 local rigidity coherence shadow instrumentation.
 # RGB and registered depth are jointly remapped to P=K so LK, ORB, depth,
 # mask, and ego-flow projection share one undistorted pinhole domain.
 # Shadow-only: no dynamic decision, fusion, or SLAM mutation.
@@ -46,7 +46,7 @@ Geometry.Enable: 1
 Geometry.SingleReferenceShadowEnable: 0
 Geometry.MultiReferenceShadowEnable: 0
 Geometry.SparseEgoFlowShadowEnable: 1
-Geometry.LocalRigidityShadowEnable: 0
+Geometry.LocalRigidityShadowEnable: 1
 Geometry.LogEveryN: 30
 Geometry.ResidualThresholdM: 0.10
 Geometry.RegionGrowEnable: 0

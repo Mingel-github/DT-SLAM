@@ -247,6 +247,94 @@ struct GeometricSparseFlowResult
     GeometricSparseFlowStats stats;
 };
 
+enum class GeometricRigidityNodeState
+{
+    Measured,
+    SparseFlowInvalid,
+    ForwardBackwardRejected,
+    SemanticExcluded,
+    CurrentDepthInvalid,
+    UncertaintyInvalid,
+    OutsideImage,
+    DuplicateImagePoint,
+    NoGraphEdge
+};
+
+struct GeometricRigidityNodeSample
+{
+    std::size_t featureIndex = 0;
+    cv::Point2f currentPixel;
+    cv::Point2f referencePixel;
+    cv::Point3f currentPointMeters;
+    cv::Point3f referencePointMeters;
+    // G2-4F3U axial depth uncertainty from the fixed Kinect-style
+    // depth-square model and the 3x3 Gaussian depth mixture. These are
+    // continuous shadow measurements, not confidence or motion labels.
+    float currentDepthUncertaintyStdMeters = 0.0f;
+    float referenceDepthUncertaintyStdMeters = 0.0f;
+    float currentDepthNeighborhoodValidWeight = 0.0f;
+    float referenceDepthNeighborhoodValidWeight = 0.0f;
+    float forwardBackwardErrorPixels = 0.0f;
+    float flowResidualMagnitudePixels = 0.0f;
+    std::size_t validNeighborCount = 0;
+    float incidentAbsoluteStrainMedianMeters = 0.0f;
+    float incidentAbsoluteStrainP90Meters = 0.0f;
+    float incidentRelativeStrainMedian = 0.0f;
+    float incidentRelativeStrainP90 = 0.0f;
+    float incidentUncertaintyNormalizedStrainMedian = 0.0f;
+    float incidentUncertaintyNormalizedStrainP90 = 0.0f;
+    GeometricRigidityNodeState state =
+        GeometricRigidityNodeState::SparseFlowInvalid;
+};
+
+struct GeometricRigidityEdgeSample
+{
+    std::size_t featureIndexA = 0;
+    std::size_t featureIndexB = 0;
+    float referenceDistanceMeters = 0.0f;
+    float currentDistanceMeters = 0.0f;
+    float absoluteStrainMeters = 0.0f;
+    float relativeStrain = 0.0f;
+    float deltaLengthUncertaintyStdMeters = 0.0f;
+    float uncertaintyNormalizedStrain = 0.0f;
+    float flowResidualMagnitudePixelsA = 0.0f;
+    float flowResidualMagnitudePixelsB = 0.0f;
+    float forwardBackwardErrorPixelsA = 0.0f;
+    float forwardBackwardErrorPixelsB = 0.0f;
+};
+
+struct GeometricRigidityStats
+{
+    std::size_t inputFeatureCount = 0;
+    std::size_t sparseFlowMeasuredCount = 0;
+    std::size_t forwardBackwardRejectedCount = 0;
+    std::size_t semanticExcludedCount = 0;
+    std::size_t currentDepthInvalidCount = 0;
+    std::size_t uncertaintyInvalidCount = 0;
+    std::size_t outsideImageCount = 0;
+    std::size_t duplicateImagePointCount = 0;
+    std::size_t eligibleNodeCount = 0;
+    std::size_t nodeWithEdgeCount = 0;
+    std::size_t validEdgeCount = 0;
+    std::size_t uncertaintyNormalizedEdgeCount = 0;
+    std::size_t uncertaintyFloorUseCount = 0;
+    // Khoshelham and Elberink (2012), converted to z in meters. This is a
+    // literature-model transfer for shadow diagnostics, not a per-device
+    // calibration for the TUM/Bonn cameras.
+    float axialDepthNoiseCoefficientPerMeter = 0.001425f;
+    float uncertaintyDenominatorFloorMeters = 1e-6f;
+    double graphMs = 0.0;
+    double metricMs = 0.0;
+    double totalMs = 0.0;
+};
+
+struct GeometricRigidityResult
+{
+    std::vector<GeometricRigidityNodeSample> nodes;
+    std::vector<GeometricRigidityEdgeSample> edges;
+    GeometricRigidityStats stats;
+};
+
 struct GeometricRegionPartitionStats
 {
     int domainScale = 1;
@@ -455,6 +543,24 @@ public:
 
     static const char *SparseFlowEvidenceStateName(
         const GeometricSparseFlowEvidenceState state);
+
+    // G2-4F3 shadow-only local rigidity measurement. Delaunay adjacency is
+    // built in the current image and 3-D edge-length change is measured
+    // between adjacent RGB-D frames. It emits no threshold or motion class.
+    static GeometricRigidityResult ComputeLocalRigidity(
+        const cv::Mat &referenceDepthMeters,
+        const cv::Mat &currentDepthMeters,
+        const cv::Mat &K,
+        const GeometricSparseFlowResult &sparseFlow,
+        const std::vector<unsigned char> &semanticDynamic =
+            std::vector<unsigned char>(),
+        const float maximumForwardBackwardErrorPixels = 0.25f,
+        const float relativeDenominatorFloorMeters = 1e-4f,
+        const float axialDepthNoiseCoefficientPerMeter = 0.001425f,
+        const float uncertaintyDenominatorFloorMeters = 1e-6f);
+
+    static const char *RigidityNodeStateName(
+        const GeometricRigidityNodeState state);
 
     // G2-2R pure selection helper. Candidate frame ids must already be
     // ordered by the caller's reference policy. Missing cache entries remain
