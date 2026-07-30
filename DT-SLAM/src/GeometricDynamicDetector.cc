@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/video/tracking.hpp>
 
 namespace ORB_SLAM2
 {
@@ -57,6 +58,85 @@ void ValidateCameraMatrix(const cv::Mat &K)
 bool IsValidDepth(const float depth)
 {
     return std::isfinite(depth) && depth>0.0f;
+}
+
+void ValidateGrayImage(const cv::Mat &image, const char *name)
+{
+    if(image.empty() || image.type()!=CV_8UC1)
+    {
+        throw std::invalid_argument(
+            std::string(name)+" must be a non-empty CV_8UC1 image");
+    }
+}
+
+bool ProjectSparseFlowPoint(
+    const cv::Point2f &referencePixel,
+    const float referenceDepthMeters,
+    const cv::Mat &relativePose,
+    const cv::Mat &K,
+    cv::Point2f &currentPixel)
+{
+    if(!IsValidDepth(referenceDepthMeters))
+        return false;
+
+    const float fx = K.at<float>(0,0);
+    const float fy = K.at<float>(1,1);
+    const float cx = K.at<float>(0,2);
+    const float cy = K.at<float>(1,2);
+    const float x =
+        (referencePixel.x-cx)*referenceDepthMeters/fx;
+    const float y =
+        (referencePixel.y-cy)*referenceDepthMeters/fy;
+
+    const float transformedX =
+        relativePose.at<float>(0,0)*x+
+        relativePose.at<float>(0,1)*y+
+        relativePose.at<float>(0,2)*referenceDepthMeters+
+        relativePose.at<float>(0,3);
+    const float transformedY =
+        relativePose.at<float>(1,0)*x+
+        relativePose.at<float>(1,1)*y+
+        relativePose.at<float>(1,2)*referenceDepthMeters+
+        relativePose.at<float>(1,3);
+    const float transformedZ =
+        relativePose.at<float>(2,0)*x+
+        relativePose.at<float>(2,1)*y+
+        relativePose.at<float>(2,2)*referenceDepthMeters+
+        relativePose.at<float>(2,3);
+    if(!std::isfinite(transformedX) ||
+       !std::isfinite(transformedY) ||
+       !std::isfinite(transformedZ) ||
+       transformedZ<=0.0f)
+    {
+        return false;
+    }
+
+    currentPixel.x = fx*transformedX/transformedZ+cx;
+    currentPixel.y = fy*transformedY/transformedZ+cy;
+    return std::isfinite(currentPixel.x) &&
+           std::isfinite(currentPixel.y);
+}
+
+double Percentile(
+    std::vector<float> values,
+    const double probability)
+{
+    if(values.empty())
+        return 0.0;
+    std::sort(values.begin(),values.end());
+    const double position =
+        probability*static_cast<double>(values.size()-1);
+    const std::size_t lower =
+        static_cast<std::size_t>(std::floor(position));
+    const std::size_t upper =
+        static_cast<std::size_t>(std::ceil(position));
+    if(lower==upper)
+        return values[lower];
+    const double fraction =
+        position-static_cast<double>(lower);
+    return
+        static_cast<double>(values[lower])*(1.0-fraction)+
+        static_cast<double>(values[upper])*fraction;
 }
 
 GeometricWarpStats AccumulateSampledReferenceEvidence(
@@ -1368,6 +1448,387 @@ GeometricDynamicDetector::ComputePyramidMultiReferenceEvidence(
         std::chrono::duration<double,std::milli>(
             expandEnd-totalStart).count();
     return result;
+}
+
+std::vector<GeometricFeatureEvidenceSample>
+GeometricDynamicDetector::SampleMultiReferenceEvidenceAtFeatures(
+    const GeometricMultiReferenceResult &evidence,
+    const std::vector<cv::Point2f> &featurePixels)
+{
+    const bool hasNativeEvidence =
+        !evidence.nativeComparisonCount.empty() ||
+        !evidence.nativePositiveCount.empty() ||
+        !evidence.nativeNegativeCount.empty() ||
+        !evidence.nativeConsistentCount.empty();
+    const cv::Mat *comparison = &evidence.comparisonCount;
+    const cv::Mat *positive = &evidence.positiveCount;
+    const cv::Mat *negative = &evidence.negativeCount;
+    const cv::Mat *consistent = &evidence.consistentCount;
+    int scale = 1;
+
+    if(hasNativeEvidence)
+    {
+        if(evidence.nativeComparisonCount.empty() ||
+           evidence.nativePositiveCount.empty() ||
+           evidence.nativeNegativeCount.empty() ||
+           evidence.nativeConsistentCount.empty() ||
+           evidence.nativeScale<1)
+        {
+            throw std::invalid_argument(
+                "native feature evidence must provide four count images "
+                "and a positive scale");
+        }
+        comparison = &evidence.nativeComparisonCount;
+        positive = &evidence.nativePositiveCount;
+        negative = &evidence.nativeNegativeCount;
+        consistent = &evidence.nativeConsistentCount;
+        scale = evidence.nativeScale;
+    }
+
+    if(comparison->empty() || positive->empty() ||
+       negative->empty() || consistent->empty())
+    {
+        throw std::invalid_argument(
+            "feature evidence sampling requires four count images");
+    }
+    if(comparison->type()!=CV_8UC1 ||
+       positive->type()!=CV_8UC1 ||
+       negative->type()!=CV_8UC1 ||
+       consistent->type()!=CV_8UC1 ||
+       positive->size()!=comparison->size() ||
+       negative->size()!=comparison->size() ||
+       consistent->size()!=comparison->size())
+    {
+        throw std::invalid_argument(
+            "feature evidence count images must be same-size CV_8UC1");
+    }
+
+    std::vector<GeometricFeatureEvidenceSample> samples;
+    samples.reserve(featurePixels.size());
+    for(std::size_t index=0; index<featurePixels.size(); ++index)
+    {
+        GeometricFeatureEvidenceSample sample;
+        sample.featureIndex = index;
+        sample.imageU =
+            static_cast<int>(std::floor(featurePixels[index].x));
+        sample.imageV =
+            static_cast<int>(std::floor(featurePixels[index].y));
+        sample.nativeScale = scale;
+        sample.nativeU = sample.imageU/scale;
+        sample.nativeV = sample.imageV/scale;
+
+        if(sample.imageU<0 || sample.imageV<0 ||
+           sample.nativeU<0 || sample.nativeV<0 ||
+           sample.nativeU>=comparison->cols ||
+           sample.nativeV>=comparison->rows)
+        {
+            sample.nativeU = -1;
+            sample.nativeV = -1;
+            samples.push_back(sample);
+            continue;
+        }
+
+        sample.comparisonCount =
+            comparison->at<unsigned char>(
+                sample.nativeV,sample.nativeU);
+        sample.positiveCount =
+            positive->at<unsigned char>(
+                sample.nativeV,sample.nativeU);
+        sample.negativeCount =
+            negative->at<unsigned char>(
+                sample.nativeV,sample.nativeU);
+        sample.consistentCount =
+            consistent->at<unsigned char>(
+                sample.nativeV,sample.nativeU);
+        if(static_cast<unsigned int>(sample.positiveCount)+
+               static_cast<unsigned int>(sample.negativeCount)+
+               static_cast<unsigned int>(sample.consistentCount)!=
+           static_cast<unsigned int>(sample.comparisonCount))
+        {
+            throw std::logic_error(
+                "feature evidence votes do not partition comparisons");
+        }
+        samples.push_back(sample);
+    }
+    return samples;
+}
+
+GeometricSparseFlowResult
+GeometricDynamicDetector::ComputeSparseEgoFlow(
+    const cv::Mat &currentGray,
+    const cv::Mat &referenceGray,
+    const cv::Mat &referenceDepthMeters,
+    const std::vector<cv::Point2f> &currentFeaturePixels,
+    const cv::Mat &TcwReference,
+    const cv::Mat &TcwCurrent,
+    const cv::Mat &K,
+    const cv::Mat &TcwGroundTruthReference,
+    const cv::Mat &TcwGroundTruthCurrent)
+{
+    ValidateGrayImage(currentGray,"current gray image");
+    ValidateGrayImage(referenceGray,"reference gray image");
+    ValidateDepth(referenceDepthMeters,"sparse-flow reference depth");
+    ValidatePose(TcwReference,"sparse-flow reference Tcw");
+    ValidatePose(TcwCurrent,"sparse-flow current Tcw");
+    ValidateCameraMatrix(K);
+    if(currentGray.size()!=referenceGray.size() ||
+       currentGray.size()!=referenceDepthMeters.size())
+    {
+        throw std::invalid_argument(
+            "sparse-flow gray/depth images must have identical dimensions");
+    }
+    if(!cv::checkRange(TcwReference) ||
+       !cv::checkRange(TcwCurrent) ||
+       !cv::checkRange(K))
+    {
+        throw std::invalid_argument(
+            "sparse-flow poses and K must contain finite values");
+    }
+
+    const bool hasGroundTruth =
+        !TcwGroundTruthReference.empty() ||
+        !TcwGroundTruthCurrent.empty();
+    if(hasGroundTruth)
+    {
+        if(TcwGroundTruthReference.empty() ||
+           TcwGroundTruthCurrent.empty())
+        {
+            throw std::invalid_argument(
+                "both sparse-flow ground-truth poses must be provided");
+        }
+        ValidatePose(
+            TcwGroundTruthReference,
+            "sparse-flow ground-truth reference Tcw");
+        ValidatePose(
+            TcwGroundTruthCurrent,
+            "sparse-flow ground-truth current Tcw");
+        if(!cv::checkRange(TcwGroundTruthReference) ||
+           !cv::checkRange(TcwGroundTruthCurrent))
+        {
+            throw std::invalid_argument(
+                "sparse-flow ground-truth poses must be finite");
+        }
+    }
+
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+    GeometricSparseFlowResult result;
+    result.stats.featureCount = currentFeaturePixels.size();
+    result.samples.resize(currentFeaturePixels.size());
+    if(currentFeaturePixels.empty())
+    {
+        result.stats.totalMs =
+            std::chrono::duration<double,std::milli>(
+                std::chrono::steady_clock::now()-totalStart).count();
+        return result;
+    }
+
+    std::vector<cv::Point2f> referencePixels;
+    std::vector<cv::Point2f> forwardBackPixels;
+    std::vector<unsigned char> backwardStatus;
+    std::vector<unsigned char> forwardStatus;
+    std::vector<float> backwardErrors;
+    std::vector<float> forwardErrors;
+    const cv::Size lkWindow(21,21);
+    const int maximumLevel = 3;
+    const cv::TermCriteria termination(
+        cv::TermCriteria::COUNT | cv::TermCriteria::EPS,
+        30,0.01);
+    const double minimumEigenvalueThreshold = 1e-4;
+
+    const std::chrono::steady_clock::time_point backwardStart =
+        std::chrono::steady_clock::now();
+    cv::calcOpticalFlowPyrLK(
+        currentGray,referenceGray,currentFeaturePixels,
+        referencePixels,backwardStatus,backwardErrors,
+        lkWindow,maximumLevel,termination,0,
+        minimumEigenvalueThreshold);
+    result.stats.backwardLkMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-backwardStart).count();
+
+    const std::chrono::steady_clock::time_point forwardStart =
+        std::chrono::steady_clock::now();
+    cv::calcOpticalFlowPyrLK(
+        referenceGray,currentGray,referencePixels,
+        forwardBackPixels,forwardStatus,forwardErrors,
+        lkWindow,maximumLevel,termination,0,
+        minimumEigenvalueThreshold);
+    result.stats.forwardLkMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-forwardStart).count();
+
+    const cv::Mat camera = AsFloatMatrix(K);
+    const cv::Mat slamRelativePose =
+        AsFloatMatrix(TcwCurrent)*
+        AsFloatMatrix(TcwReference).inv();
+    cv::Mat groundTruthRelativePose;
+    if(hasGroundTruth)
+    {
+        groundTruthRelativePose =
+            AsFloatMatrix(TcwGroundTruthCurrent)*
+            AsFloatMatrix(TcwGroundTruthReference).inv();
+    }
+
+    std::vector<float> slamResidualMagnitudes;
+    std::vector<float> groundTruthResidualMagnitudes;
+    const std::chrono::steady_clock::time_point projectionStart =
+        std::chrono::steady_clock::now();
+    for(std::size_t index=0;
+        index<currentFeaturePixels.size(); ++index)
+    {
+        GeometricSparseFlowSample &sample = result.samples[index];
+        sample.featureIndex = index;
+        sample.currentPixel = currentFeaturePixels[index];
+        sample.referencePixel = referencePixels[index];
+        sample.forwardBackPixel = forwardBackPixels[index];
+        sample.backwardLkValid = backwardStatus[index]!=0;
+        sample.forwardLkValid = forwardStatus[index]!=0;
+        sample.backwardLkError = backwardErrors[index];
+        sample.forwardLkError = forwardErrors[index];
+        sample.forwardBackwardErrorPixels =
+            cv::norm(sample.forwardBackPixel-sample.currentPixel);
+        sample.groundTruthPoseAvailable = hasGroundTruth;
+        if(sample.backwardLkValid)
+            ++result.stats.backwardLkValidCount;
+        if(sample.forwardLkValid)
+            ++result.stats.forwardLkValidCount;
+        if(!sample.backwardLkValid || !sample.forwardLkValid)
+        {
+            sample.evidenceState =
+                GeometricSparseFlowEvidenceState::LkInvalid;
+            continue;
+        }
+
+        const int referenceU = cvRound(sample.referencePixel.x);
+        const int referenceV = cvRound(sample.referencePixel.y);
+        if(referenceU<0 || referenceV<0 ||
+           referenceU>=referenceDepthMeters.cols ||
+           referenceV>=referenceDepthMeters.rows)
+        {
+            sample.evidenceState =
+                GeometricSparseFlowEvidenceState::DepthInvalid;
+            continue;
+        }
+        sample.referenceDepthMeters =
+            referenceDepthMeters.at<float>(
+                referenceV,referenceU);
+        sample.referenceDepthValid =
+            IsValidDepth(sample.referenceDepthMeters);
+        if(!sample.referenceDepthValid)
+        {
+            sample.evidenceState =
+                GeometricSparseFlowEvidenceState::DepthInvalid;
+            continue;
+        }
+        ++result.stats.referenceDepthValidCount;
+
+        sample.slamProjectionValid =
+            ProjectSparseFlowPoint(
+                sample.referencePixel,
+                sample.referenceDepthMeters,
+                slamRelativePose,camera,
+                sample.slamEgoPixel);
+        if(sample.slamProjectionValid)
+        {
+            sample.slamProjectionValid =
+                sample.slamEgoPixel.x>=0.0f &&
+                sample.slamEgoPixel.y>=0.0f &&
+                sample.slamEgoPixel.x<
+                    static_cast<float>(currentGray.cols) &&
+                sample.slamEgoPixel.y<
+                    static_cast<float>(currentGray.rows);
+        }
+        if(!sample.slamProjectionValid)
+        {
+            sample.evidenceState =
+                GeometricSparseFlowEvidenceState::ProjectionInvalid;
+            continue;
+        }
+
+        sample.slamResidualPixels =
+            sample.currentPixel-sample.slamEgoPixel;
+        sample.slamResidualMagnitudePixels =
+            cv::norm(sample.slamResidualPixels);
+        sample.evidenceState =
+            GeometricSparseFlowEvidenceState::Measured;
+        ++result.stats.slamResidualValidCount;
+        slamResidualMagnitudes.push_back(
+            sample.slamResidualMagnitudePixels);
+
+        if(hasGroundTruth)
+        {
+            sample.groundTruthProjectionValid =
+                ProjectSparseFlowPoint(
+                    sample.referencePixel,
+                    sample.referenceDepthMeters,
+                    groundTruthRelativePose,camera,
+                    sample.groundTruthEgoPixel);
+            if(sample.groundTruthProjectionValid)
+            {
+                sample.groundTruthProjectionValid =
+                    sample.groundTruthEgoPixel.x>=0.0f &&
+                    sample.groundTruthEgoPixel.y>=0.0f &&
+                    sample.groundTruthEgoPixel.x<
+                        static_cast<float>(currentGray.cols) &&
+                    sample.groundTruthEgoPixel.y<
+                        static_cast<float>(currentGray.rows);
+            }
+            if(sample.groundTruthProjectionValid)
+            {
+                sample.groundTruthResidualPixels =
+                    sample.currentPixel-
+                    sample.groundTruthEgoPixel;
+                sample.groundTruthResidualMagnitudePixels =
+                    cv::norm(
+                        sample.groundTruthResidualPixels);
+                ++result.stats.groundTruthResidualValidCount;
+                groundTruthResidualMagnitudes.push_back(
+                    sample.groundTruthResidualMagnitudePixels);
+            }
+        }
+    }
+    result.stats.depthAndProjectionMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-projectionStart).count();
+
+    result.stats.slamResidualMedianPixels =
+        Percentile(slamResidualMagnitudes,0.5);
+    result.stats.slamResidualP90Pixels =
+        Percentile(slamResidualMagnitudes,0.9);
+    result.stats.slamResidualP95Pixels =
+        Percentile(slamResidualMagnitudes,0.95);
+    result.stats.groundTruthResidualMedianPixels =
+        Percentile(groundTruthResidualMagnitudes,0.5);
+    result.stats.groundTruthResidualP90Pixels =
+        Percentile(groundTruthResidualMagnitudes,0.9);
+    result.stats.groundTruthResidualP95Pixels =
+        Percentile(groundTruthResidualMagnitudes,0.95);
+    result.stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-totalStart).count();
+    return result;
+}
+
+const char *GeometricDynamicDetector::SparseFlowEvidenceStateName(
+    const GeometricSparseFlowEvidenceState state)
+{
+    switch(state)
+    {
+    case GeometricSparseFlowEvidenceState::Measured:
+        return "measured";
+    case GeometricSparseFlowEvidenceState::LkInvalid:
+        return "lk_invalid";
+    case GeometricSparseFlowEvidenceState::DepthInvalid:
+        return "depth_invalid";
+    case GeometricSparseFlowEvidenceState::ProjectionInvalid:
+        return "projection_invalid";
+    case GeometricSparseFlowEvidenceState::DomainInvalid:
+        return "domain_invalid";
+    case GeometricSparseFlowEvidenceState::ReferenceUnavailable:
+        return "reference_unavailable";
+    }
+    return "reference_unavailable";
 }
 
 GeometricReferenceSelectionResult

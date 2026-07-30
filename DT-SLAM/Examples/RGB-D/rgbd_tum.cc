@@ -111,12 +111,37 @@ int main(int argc, char **argv)
     }
 
     ORB_SLAM2::RGBDInputRectifier inputRectifier;
+    cv::Mat groundTruthTwcRightTransform;
     try
     {
         cv::FileStorage settings(argv[2],cv::FileStorage::READ);
         if(!settings.isOpened())
             throw std::runtime_error("Failed to open settings for RGB-D input");
         inputRectifier.Configure(settings);
+        const cv::FileNode groundTruthRightTransformNode =
+            settings["GroundTruth.TwcRightTransform"];
+        if(!groundTruthRightTransformNode.empty())
+        {
+            groundTruthRightTransformNode >>
+                groundTruthTwcRightTransform;
+            if(groundTruthTwcRightTransform.empty() ||
+               groundTruthTwcRightTransform.rows!=4 ||
+               groundTruthTwcRightTransform.cols!=4 ||
+               groundTruthTwcRightTransform.channels()!=1)
+            {
+                throw std::invalid_argument(
+                    "GroundTruth.TwcRightTransform must be a 4x4 matrix");
+            }
+            groundTruthTwcRightTransform.convertTo(
+                groundTruthTwcRightTransform,CV_32F);
+            if(!cv::checkRange(groundTruthTwcRightTransform) ||
+               std::abs(cv::determinant(
+                   groundTruthTwcRightTransform))<=1e-9)
+            {
+                throw std::invalid_argument(
+                    "GroundTruth.TwcRightTransform must be finite and invertible");
+            }
+        }
     }
     catch(const std::exception &error)
     {
@@ -154,11 +179,25 @@ int main(int argc, char **argv)
                    groundTruthSamples,vTimestamps[index],
                    maxGroundTruthDeltaSeconds,vGroundTruthTcw[index]))
             {
+                if(!groundTruthTwcRightTransform.empty())
+                {
+                    // If Twc_sensor = Twc_text * E (up to a left-side
+                    // global-frame transform), then
+                    // Tcw_sensor = E^-1 * Tcw_text. The left-side
+                    // transform cancels in relative-pose diagnostics.
+                    vGroundTruthTcw[index] =
+                        groundTruthTwcRightTransform.inv()*
+                        vGroundTruthTcw[index];
+                }
                 ++availableGroundTruthFrames;
             }
         }
         cout << "[Geometry G0-2P] GT trajectory: " << groundTruthPath << endl;
         cout << "[Geometry G0-2P] text convention: Twc; detector input: Tcw"
+             << endl;
+        cout << "[Geometry G0-2P] Twc right-frame transform: "
+             << (groundTruthTwcRightTransform.empty()
+                 ? "identity" : "configured")
              << endl;
         cout << "[Geometry G0-2P] interpolation available: "
              << availableGroundTruthFrames << "/" << nImages

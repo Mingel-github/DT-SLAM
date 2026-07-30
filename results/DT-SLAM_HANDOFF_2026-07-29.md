@@ -52,36 +52,43 @@ main
 当前已推送提交：
 
 ```text
-670f008 Add lightweight geometry sampling and region shadows
+1a4bd8a Add geometry separability and Bonn coordinate audits
 ```
 
-检查时 `HEAD` 与 `origin/main` 均为 `670f008`。之后的 G2-3R1、G2-3R2、G2-3R3 和 ATE 报告仍在本地，尚未提交或推送。
+检查时 `HEAD` 与 `origin/main` 均为 `1a4bd8a`。G2-4C 选帧工具、时间戳/
+hold-out 修正、G2-4D C++ person 导出/box coverage、G2-4E 连续 evidence
+审计、G2-4F0 direct feature evidence、阶段文档及其原始结果仍在本地，尚未
+提交或推送。
 
-已修改的跟踪文件：
+当前主要未提交文件：
 
 ```text
-DT-SLAM/Examples/RGB-D/geometric_warp_test.cc
-DT-SLAM/include/GeometricDynamicDetector.h
-DT-SLAM/include/Tracking.h
-DT-SLAM/src/GeometricDynamicDetector.cc
-DT-SLAM/src/Tracking.cc
+DT-SLAM/tools/select_bonn_review_frames.py
+DT-SLAM/Examples/RGB-D/semantic_review_export.cc
+DT-SLAM/Examples/RGB-D/box_region_partition_audit.cc
+DT-SLAM/tools/audit_bonn_semantic_box_coverage.py
+DT-SLAM/tools/audit_bonn_box_region_evidence.py
+DT-SLAM/tools/audit_bonn_feature_evidence.py
+DT-SLAM/tools/audit_bonn_sparse_ego_flow.py
+DT-SLAM/tools/prepare_bonn_temporal_motion_review.py
+DT-SLAM/tools/prepare_bonn_independent_review_candidates.py
+DT-SLAM/Examples/RGB-D/BONN_GeometrySparseEgoFlowShadow.yaml
+DT-SLAM/Examples/RGB-D/TUM3_GeometrySparseEgoFlowShadow.yaml
+results/g2_4_2026-07-29/G2_4C_BONN_AUTOMATIC_FRAME_SELECTION_SPEC.md
+results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_RESULT.md
+results/g2_4c_2026-07-29/G2_4C_BONN_AUTOMATIC_FRAME_SELECTION_RESULT.md
+results/g2_4c_correction_2026-07-29/G2_4C_TIMESTAMP_AND_HOLDOUT_CORRECTION_RESULT.md
+results/g2_4c_correction_2026-07-29/
+results/g2_4_2026-07-29/G2_4_BONN_STATIC_MOVING_BOX_EVALUATION_PROTOCOL.md
 results/DT-SLAM_几何模块阶段进度_2026-07-28.md
-```
-
-主要未跟踪内容：
-
-```text
-DT-SLAM/Examples/RGB-D/TUM1_GeometryPyramidEvidenceShadow.yaml
-DT-SLAM/Examples/RGB-D/TUM1_GeometryRegionEvidenceShadow.yaml
-DT-SLAM/Examples/RGB-D/TUM3_GeometryPyramidEvidenceShadow.yaml
-DT-SLAM/Examples/RGB-D/TUM3_GeometryRegionEvidenceShadow.yaml
-DT-SLAM/tools/audit_region_dense_vs_grid.py
-DT-SLAM/tools/audit_region_evidence.py
-results/ate_semantic_baseline_2026-07-29/
-results/g2_3r1_2026-07-28/
-results/g2_3r2_2026-07-29/
-results/g2_3r3_2026-07-29/
-results/g2_3r4_2026-07-29/
+results/DT-SLAM_HANDOFF_2026-07-29.md
+results/g2_4d_2026-07-29/G2_4D_PERSON_EXPORT_AND_BOX_PREANNOTATION_SPEC.md
+results/g2_4d_2026-07-29/G2_4D_PERSON_EXPORT_AND_BOX_PREANNOTATION_RESULT.md
+results/g2_4e_2026-07-29/
+results/g2_4f_2026-07-29/
+results/g2_4f1_2026-07-29/
+results/g2_4f1_expansion_2026-07-29/
+results/g2_4f1_development_data_2026-07-29/
 ```
 
 注意：
@@ -166,7 +173,9 @@ results/g2_3r4_2026-07-29/
 | G2-3R2 | full-dense 对 grid 的覆盖上界审计 | 已完成，确认 grid coverage 是瓶颈 |
 | G2-3R3 | scale-2 深度金字塔 dense evidence | 已完成，覆盖通过、实时性未通过 |
 | G2-3R4 | scale-2 低分辨率区域近似 | 最小实现/测试完成；端到端收益门失败，路线停止 |
-| G2-4 | 动态/静态区分能力与风险代理 | G2-4A 初步审计和风险字段接入完成；下一步为 Bonn 坐标域审计 |
+| G2-4 | 动态/静态区分能力与风险代理 | G2-4A/B/C/D/E/F0/F1/F1D 完成；depth region/direct depth evidence 未过门，sparse ego-flow 在非 holdout 气球数据上通过方向性 evidence 门 |
+| G2-4F1 | 稀疏 observed-flow 减 ego-flow | 实现、测试和同步语义全序列审计完成；约 2.5–2.7 ms，保持 shadow-only |
+| G2-4F1D | 非 holdout 气球开发数据门与连续 evidence | 已完成；6 个可测 exact-zero person-overlap 帧中框内/背景 residual 中位 `11.919/0.723 px`；未选择阈值，未放行 G1 |
 | G1-F | 几何特征真正参与 tracking/filtering | 未放行 |
 | G1-D | 几何区域真正过滤深度或稠密写图 | 未放行 |
 
@@ -180,7 +189,7 @@ results/g2_3r4_2026-07-29/
 
 ---
 
-## 5. 最新阶段：G2-3R3
+## 5. 已冻结的主要证据表示：G2-3R3
 
 规范与结果：
 
@@ -360,9 +369,9 @@ export LD_LIBRARY_PATH="/home/zhu/dynaslam_ws/pangolin_install/lib:/home/zhu/dyn
 
 ---
 
-## 8. G2-3R4 结果与下一步
+## 8. G2-3R4 至 G2-4F0 的推进与当前下一步
 
-当前建议的下一步是：
+G2-3R4 当时冻结的目标是：
 
 ```text
 G2-3R4：在同一个 scale-2 pyramid 域完成低分辨率深度区域表示，
@@ -377,7 +386,7 @@ G2-3R4：在同一个 scale-2 pyramid 域完成低分辨率深度区域表示，
 - 与 G2-3R3 full-resolution reference partition 做结构一致性和证据分配对照；
 - 实测端到端 active time、deadline misses 和 actual FPS。
 
-本地文献核对和设计报告已经完成，当前不能跳过 SPEC 评审直接写实现：
+本地文献核对和设计报告在实现前已经完成：
 
 ```text
 /home/zhu/dynaslam_ws/results/g2_3r4_2026-07-29/G2_3R4_LOW_RESOLUTION_REGION_LITERATURE_AUDIT.md
@@ -401,7 +410,7 @@ SPEC 已明确：
 - 若结构或有界收益门失败，立即停止该路线；
 - 即使通过，也先验证动态/静态区分能力，不默认继续 CPU 优化。
 
-实现前评审仍需重点检查：
+实现前评审按以下项目完成：
 
 - KinectFusion 或其他本地原始论文对低分辨率深度分割/金字塔边界处理能支持到什么程度；
 - 当前区域标签上采样属于哪一部分工程假设；
@@ -454,6 +463,10 @@ results/g2_4_2026-07-29/G2_4A_RISK_INSTRUMENTATION_RESULT.md
 results/g2_4_2026-07-29/G2_4_BONN_STATIC_MOVING_BOX_EVALUATION_PROTOCOL.md
 results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_AUDIT_AND_SPEC.md
 results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_RESULT.md
+results/g2_4_2026-07-29/G2_4C_BONN_AUTOMATIC_FRAME_SELECTION_SPEC.md
+results/g2_4c_2026-07-29/G2_4C_BONN_AUTOMATIC_FRAME_SELECTION_RESULT.md
+results/g2_4d_2026-07-29/G2_4D_PERSON_EXPORT_AND_BOX_PREANNOTATION_SPEC.md
+results/g2_4d_2026-07-29/G2_4D_PERSON_EXPORT_AND_BOX_PREANNOTATION_RESULT.md
 ```
 
 boundary、invalid-depth 和 reference-support instrumentation 已完成且默认
@@ -472,9 +485,146 @@ geometry全部使用`P=official K`的统一域，并将tracking distortion设为
 2107条region CSV invariant无违反。host GPU的30帧online YOLO也通过，
 mask ready为`30/30`且age median/max为`0/0`。完整坐标域门通过。
 
-下一小步是不修改YOLO代码地自动选帧并审计box semantic coverage；不是动态
-阈值。
-G1-D 仍必须等待像素区域 mask 的独立验收。
+G2-4C自动候选选帧已经完成。第一版因重复视图过多失败并保留；第二版在不改
+geometry proxy的前提下加入固定多样性门，两条box序列各得到24个唯一候选。
+
+后续独立审阅发现两项必须修正的问题：
+
+1. 两条序列均已按geometry proxy排序并查看联系表，`moving_obstructing_box`
+   还参与了diversity规则修正，因此二者都是development/review sequence，
+   不是strict hold-out；
+2. 原工具用RGB timestamp插值GT pose，而depth warp物理上对应depth timestamp。
+
+修正后的工具显式支持`--pose-timestamp-source rgb|depth`。四组重跑显示
+per-frame inconsistency相关较高（`0.893/0.927`），但24帧候选只重叠
+`14/24`和`12/24`，因此后续开发期审查默认使用depth-time候选，RGB-time
+只保留pipeline-matched sensitivity对照。两套结果都不是motion GT，也不能
+估计完整序列的无偏precision/recall。
+
+修正报告：
+
+```text
+results/g2_4c_correction_2026-07-29/
+  G2_4C_TIMESTAMP_AND_HOLDOUT_CORRECTION_RESULT.md
+```
+
+G2-4D 已完成修正后48个depth-time候选帧的实际C++ person detection和最终
+person union filter mask导出。48/48均满足requested seq等于returned mask
+seq。当前真实mask是`CV_8U`且按`nonzero=filtered`解释；由于实例mask resize
+使用线性插值，边缘存在`1..254`，本阶段只记录，没有修改YOLO。
+
+仅查看rectified RGB和source frame id生成了
+`agent_rgb_only_coarse_bbox_v1` target-box预标注；没有读取geometry
+residual/score/role。预标注明确为unverified且不是GT。nonobstructing仅
+5/24帧有person mask，obstructing仅4/24帧有person mask；无人物箱子帧中
+person-only语义mask为零。所有粗框内非零覆盖来自人物遮挡/搬运，不能解释为
+箱子被正确分割。
+
+G2-4E 已完成上述 development separability audit，并先封存了未运行
+geometry proxy 的 `rgbd_bonn_balloon_tracking.zip`。封存 SHA256 为：
+
+```text
+3c63ec5d06ffc7b97f2f3f965f4bdf7e52b72f38cd98e0b532456e0ef7e3c421
+```
+
+两条完整 development 序列分别运行 `778/589` 帧，online person mask 均为
+每帧就绪、age 为 0；shadow 配置 actual FPS 为 `24.109/25.750`。新增离线
+partition audit 使用与在线相同的 rectification、米制深度转换和
+`PartitionDepthByDiscontinuity()`；42 个有在线证据的候选帧全部 exact match。
+
+G2-4E 的关键结果是：
+
+- nonobstructing 无人物箱子 bbox 的主导 region 约 85% 延伸到 bbox 外；
+- bbox 主导 region 的正证据与整帧全局正证据近乎相同；
+- obstructing 的 target-absent 帧全局正证据不低于 target-visible/person-absent；
+- 强信号主要由 person-present 搬运/遮挡条件驱动，而人物已由语义分支覆盖。
+
+因此当前 region-level evidence 没有通过动态判决门。没有选择阈值、没有运行
+strict hold-out，也没有修改任何 SLAM 状态。详细结果：
+
+```text
+results/g2_4e_2026-07-29/G2_4E_CONTINUOUS_DEVELOPMENT_EVIDENCE_AUDIT_RESULT.md
+results/g2_4e_2026-07-29/STRICT_HOLDOUT_MANIFEST.md
+```
+
+当前下一小步不再是继续调 region score。必须先阅读本地 PaperNotes/PDF，
+明确下一项最小证据审计的文献归属；优先考虑 direct bbox/ORB feature evidence
+和独立 motion-state 自动预标注，不得直接拟合组合阈值或解封 hold-out。
+
+G1-F 仍需可靠 feature-level 判决门；G1-D 仍必须等待像素区域 mask 的独立验收。
+
+G2-4F0 已按上述边界完成。它去掉失败的 region aggregation，直接在当前 ORB
+feature 中心读取现有 scale-2 multi-reference vote，并用 G2-4D 的独立
+RGB-only粗框和实际 person mask 做 development 审计。
+
+两条完整序列 online CUDA mask 均逐帧就绪、age=0；输出
+`23097/17794` 条 feature 记录，actual FPS 为 `24.575/25.931`。48 个候选中
+42 帧有多参考 evidence，早期缺失 6 帧继续保持 no-evidence。
+
+无人物箱子帧的关键中位数：
+
+```text
+nonobstructing:
+  inside comparison coverage       95.801%
+  inside/outside positive presence 1.746% / 6.703%
+  presence enrichment              0.289x
+  vote enrichment                  0.205x
+
+obstructing:
+  inside comparison coverage       93.413%
+  inside/outside positive presence 4.060% / 6.704% (outside n=6)
+  presence enrichment              0.472x
+  vote enrichment                  0.428x
+```
+
+所以 current direct positive evidence 在这些未知箱子候选上没有局部富集；
+失败不只来自 depth-region aggregation。人物出现时 nonobstructing 信号明显
+增强，但人物已由 semantic branch 覆盖。候选没有 motion GT、粗框不是 pixel
+GT，因此不能把该负结果泛化为所有 depth-warp 失败。
+
+```text
+dynamic_decision          = none
+direct_slam_state_mutation = none
+G1-F / G1-D               = locked
+strict hold-out           = sealed and unopened
+```
+
+G2-4F1 的文献审计、SPEC、实现、测试和两条 Bonn 完整同步语义 development
+实验均已完成。设计为：当前 ORB feature backward LK 到上一成功帧，使用
+上一帧 depth 和当前 initial/上一帧 final SE(3) 计算 ego flow，并可选
+GT-pose 对照；所有输出均为连续 residual 或 no-evidence。
+
+在查看 residual 前必须生成的独立
+`agent_rgb_temporal_motion_proxy_v1` 已完成：只查看 rectified RGB temporal
+clip，不读取任何 geometry/flow residual；48 帧得到
+stationary/moving/uncertain/not_visible=`30/7/2/9`。它不是 GT。
+
+生成代理时还发现并修正了 nonobstructing frame 246/478/537 三个错误粗框。
+G2-4D/E/F0 已在新目录完成复算，旧目录保留。F0 修正后箱内信号均值上升，但
+中位数仍未富集，且 frame 478/537 属于 stationary/high 代理，因此负门控
+不变。
+
+G2-4F1 自身中位成本约 `2.5 ms`，完整系统约 `29.27/29.70 FPS`。但关键
+`moving+person-absent` 只有 1 帧；随后完全独立于 flow/geometry 的全序列
+RGB/semantic 扩充又审查了 50 个时间窗，得到
+stationary/moving/uncertain=`48/0/2`。所以当前科学门不可评价，G1 仍锁定。
+
+下一小步应先选择一条非 strict-hold-out、保留静态背景且未知物体运动可观察
+的 development 数据；不能继续在当前样本上拟合 flow/depth 阈值。
+
+G2-4F0 文档：
+
+```text
+results/g2_4f_2026-07-29/G2_4F_DIRECT_FEATURE_EVIDENCE_LITERATURE_AUDIT.md
+results/g2_4f_2026-07-29/G2_4F0_DIRECT_MULTIREFERENCE_FEATURE_EVIDENCE_SPEC.md
+results/g2_4f_2026-07-29/G2_4F0_DIRECT_MULTIREFERENCE_FEATURE_EVIDENCE_RESULT.md
+results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_LITERATURE_AUDIT.md
+results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_SHADOW_SPEC.md
+results/g2_4f_2026-07-29/G2_4D_TO_F0_BBOX_TEMPORAL_CORRECTION_RESULT.md
+results/g2_4f_2026-07-29/G2_4F1_RGB_TEMPORAL_MOTION_PROXY_RESULT.md
+results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_SHADOW_RESULT.md
+results/g2_4f1_expansion_2026-07-29/G2_4F1_INDEPENDENT_CANDIDATE_EXPANSION_RESULT.md
+```
 
 ---
 
@@ -508,6 +658,20 @@ G1-D 仍必须等待像素区域 mask 的独立验收。
    results/g2_4_2026-07-29/G2_4_BONN_STATIC_MOVING_BOX_EVALUATION_PROTOCOL.md
    results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_AUDIT_AND_SPEC.md
    results/g2_4_2026-07-29/G2_4B_BONN_COORDINATE_DOMAIN_RESULT.md
+   results/g2_4_2026-07-29/G2_4C_BONN_AUTOMATIC_FRAME_SELECTION_SPEC.md
+   results/g2_4c_2026-07-29/G2_4C_BONN_AUTOMATIC_FRAME_SELECTION_RESULT.md
+   results/g2_4c_correction_2026-07-29/G2_4C_TIMESTAMP_AND_HOLDOUT_CORRECTION_RESULT.md
+   results/g2_4d_2026-07-29/G2_4D_PERSON_EXPORT_AND_BOX_PREANNOTATION_SPEC.md
+   results/g2_4d_2026-07-29/G2_4D_PERSON_EXPORT_AND_BOX_PREANNOTATION_RESULT.md
+   results/g2_4e_2026-07-29/G2_4E_CONTINUOUS_DEVELOPMENT_EVIDENCE_AUDIT_SPEC.md
+   results/g2_4e_2026-07-29/G2_4E_CONTINUOUS_DEVELOPMENT_EVIDENCE_AUDIT_RESULT.md
+   results/g2_4f_2026-07-29/G2_4F_DIRECT_FEATURE_EVIDENCE_LITERATURE_AUDIT.md
+   results/g2_4f_2026-07-29/G2_4F0_DIRECT_MULTIREFERENCE_FEATURE_EVIDENCE_SPEC.md
+   results/g2_4f_2026-07-29/G2_4F0_DIRECT_MULTIREFERENCE_FEATURE_EVIDENCE_RESULT.md
+   results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_LITERATURE_AUDIT.md
+   results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_SHADOW_SPEC.md
+   results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_SHADOW_RESULT.md
+   results/g2_4f1_expansion_2026-07-29/G2_4F1_INDEPENDENT_CANDIDATE_EXPANSION_RESULT.md
    results/ate_semantic_baseline_2026-07-29/REPORT.md
    ```
 
@@ -519,9 +683,15 @@ G1-D 仍必须等待像素区域 mask 的独立验收。
    - 下一小步；
    - 明确不会做的越界修改；
 7. 阅读 G2-3R4 RESULT，确认收益门失败及结构指标未测；
-8. 阅读 G2-4 初步结果、风险字段结果和 G2-4B SPEC/RESULT；下一轮只做
-   Bonn自动选帧与box semantic coverage审计，不选择动态阈值，也不继续
-   G2-3R4性能优化。
+8. 阅读 G2-4 初步结果、风险字段结果、G2-4B/C/D/E/F0/F1/F1D SPEC/RESULT及G2-4C
+   correction result；确认两个当前box序列都不是strict hold-out，G2-4D粗框
+   也不是pixel/motion GT，G2-4E region 与 G2-4F0 direct feature 判决门均
+   未通过；G2-4F1 在原 moving-box 数据上不可评价，但 F1D 已在非 holdout
+   balloon/balloon2 上得到独立于 flow 的可观察 motion proxy 和明确方向性
+   residual；
+9. 确认 `rgbd_bonn_balloon_tracking.zip` 仍保持封存状态；下一轮先从本地
+   PaperNotes/PDF 核对可靠 feature gate 与静态风险协议。不得直接融合
+   evidence、把当前中位数写成阈值、解封 hold-out 或进入 G1。
 
 ---
 
@@ -559,6 +729,36 @@ G1-D 仍必须等待像素区域 mask 的独立验收。
 - G2-4A 已确认现有 proxy 信号不足以直接形成通用判决；
 - G2-4B 已完成 Bonn 联合 rectification，RGB/depth/ORB/online mask/geometry
   坐标域门通过；
+- G2-4C 已完成两条moving-box development/review序列的自动候选选帧和
+  RGB/depth timestamp敏感性修正，但没有box motion label，strict hold-out
+  尚未选择；
+- G2-4D 已完成48帧真实C++ person filter导出和独立RGB-only box粗框审计，
+  验证无人物箱子帧没有语义过滤，同时保持粗框不是GT；
+- G2-4E 已封存 strict hold-out，并完成两条连续 development 序列的 exact
+  C++ geometry/box 成对审计；当前固定 depth-region 聚合不能隔离
+  nonobstructing box，且 person-present 是明显混杂因素，因此动态判决仍为
+  `none`；
+- G2-4F0 已在 ORB feature 中心直接审计 multi-reference vote；无人物箱子
+  条件下框内正证据没有相对背景富集，说明失败不只来自 region aggregation，
+  但由于没有 motion GT，不能泛化为所有 depth-warp 几何失败；
+- G2-4F1 已实现相邻成功帧 sparse LK observed-flow 减 RGB-D/SE(3)
+  ego-flow。两条 Bonn 同步语义开发序列保持约 29.27/29.70 FPS，F1 自身
+  中位约 2.55/2.52 ms；`moving+person-present` 有方向性信号，但
+  `moving+person-absent` 只有 1 帧，不能形成判决门；
+- 独立 RGB/semantic-only 扩充复核了 50 个额外时间窗，得到
+  stationary/moving/uncertain=`48/0/2`。没有把 box 填满视野、无法区分
+  camera/object motion 的片段强制当 positive，因此当前需要新的可观察
+  development 数据，而不是继续调 flow threshold；
+- G2-4F1D 已在协议先行的前提下将 balloon/balloon2 降为 development，并保持
+  balloon_tracking 封存。RGB-only exact-center 修正后，7 个
+  moving-observable 且气球框内 person-mask 像素恰为 0 的帧中有 6 帧存在
+  可测 ORB；框内/去人物背景 residual 中位为 `11.919/0.723 px`，成对比值
+  中位 `20.045x`，GT-pose 框内中位 `11.582 px`。这是方向性 evidence，
+  不是阈值或动态判决；
 - 几何尚未进入真正的 SLAM 过滤，因此现在不测“几何 ATE 改善”，只保留语义基线 ATE/FPS 作为冻结对照。
+
+当前下一步仍不是进入 G1。应先阅读本地 PaperNotes/PDF，冻结有文献依据的
+feature quality gate、静态 false-positive 门、development threshold 与
+holdout 验证协议；不能把当前气球 residual 中位数直接变成动态阈值。
 
 这份交接的目的不是让新会话“相信摘要”，而是让它知道去哪里核查、哪些结论已经冻结、哪些结果仍是假设，以及下一步只能改动什么。

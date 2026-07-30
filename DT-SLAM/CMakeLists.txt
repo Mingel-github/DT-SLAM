@@ -111,6 +111,10 @@ add_executable(rgbd_tum
 Examples/RGB-D/rgbd_tum.cc)
 target_link_libraries(rgbd_tum ${PROJECT_NAME})
 
+add_executable(semantic_review_export
+Examples/RGB-D/semantic_review_export.cc)
+target_link_libraries(semantic_review_export ${PROJECT_NAME})
+
 add_executable(geometric_warp_test
 Examples/RGB-D/geometric_warp_test.cc)
 target_link_libraries(geometric_warp_test ${PROJECT_NAME})
@@ -118,6 +122,10 @@ target_link_libraries(geometric_warp_test ${PROJECT_NAME})
 add_executable(depth_region_partition_audit
 Examples/RGB-D/depth_region_partition_audit.cc)
 target_link_libraries(depth_region_partition_audit ${PROJECT_NAME})
+
+add_executable(box_region_partition_audit
+Examples/RGB-D/box_region_partition_audit.cc)
+target_link_libraries(box_region_partition_audit ${PROJECT_NAME})
 
 add_executable(ji_geometry_test
 Examples/RGB-D/ji_geometry_test.cc)

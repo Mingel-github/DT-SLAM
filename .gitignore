@@ -19,10 +19,14 @@ BONN/
 results/*.txt
 
 # Runtime trajectories, local test executables, and generated diagnostics
+CameraTrajectory.txt
+KeyFrameTrajectory.txt
 DT-SLAM/CameraTrajectory*.txt
 DT-SLAM/KeyFrameTrajectory*.txt
 DT-SLAM/Examples/RGB-D/ji_geometry_test
 DT-SLAM/Examples/RGB-D/depth_region_partition_audit
+DT-SLAM/Examples/RGB-D/box_region_partition_audit
+DT-SLAM/Examples/RGB-D/semantic_review_export
 DT-SLAM/results/**/*.log
 DT-SLAM/results/**/*.txt
 results/**/*.csv

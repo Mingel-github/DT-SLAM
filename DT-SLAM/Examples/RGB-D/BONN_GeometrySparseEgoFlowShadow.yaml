@@ -1,0 +1,76 @@
+%YAML:1.0
+
+# Bonn G2-4F1 isolated sparse ego-flow residual instrumentation.
+# Shadow-only: no dynamic decision, depth/flow fusion, or SLAM mutation.
+
+Camera.fx: 542.822841
+Camera.fy: 542.576870
+Camera.cx: 315.593520
+Camera.cy: 237.756098
+
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.k3: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+
+RGBD.InputRectification.Enable: 1
+RGBD.InputRectification.fx: 542.822841
+RGBD.InputRectification.fy: 542.576870
+RGBD.InputRectification.cx: 315.593520
+RGBD.InputRectification.cy: 237.756098
+RGBD.InputRectification.k1: 0.039903
+RGBD.InputRectification.k2: -0.099343
+RGBD.InputRectification.p1: -0.000730
+RGBD.InputRectification.p2: -0.000144
+RGBD.InputRectification.k3: 0.000000
+
+# Bonn official fixed frame chain for model/sensor to OptiTrack-marker
+# coordinates. The official expression is
+# T_global = T_ROS^-1 * T_text * T_ROS * T_m; the left global transform
+# cancels in relative motion, so this stores E = T_ROS * T_m.
+GroundTruth.TwcRightTransform: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [ -1.0157, -0.1828,  0.2389, -0.0113,
+           -0.3009,  0.6147, -0.8085,  0.0111,
+            0.0009, -0.8431, -0.6413, -0.0098,
+            0.0000,  0.0000,  0.0000,  1.0000 ]
+
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 1
+Geometry.SingleReferenceShadowEnable: 0
+Geometry.MultiReferenceShadowEnable: 0
+Geometry.SparseEgoFlowShadowEnable: 1
+Geometry.LogEveryN: 30
+Geometry.ResidualThresholdM: 0.10
+Geometry.RegionGrowEnable: 0
+Geometry.DebugSave: 0
+Geometry.RegionEvidenceShadowEnable: 0
+Geometry.RegionRiskDiagnosticsEnable: 0
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

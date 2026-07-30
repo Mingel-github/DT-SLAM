@@ -42,6 +42,7 @@
 
 #include <mutex>
 #include <deque>
+#include <set>
 #include <string>
 
 namespace ORB_SLAM2
@@ -183,6 +184,8 @@ protected:
     int RemoveDynamicAssociations(Frame &frame);
     void RunGeometryShadow();
     void RunMultiReferenceGeometryShadow();
+    void RunSparseEgoFlowShadow();
+    void UpdateSparseEgoFlowReference();
     void UpdateMultiReferenceGeometryHistory(
         const cv::Mat &referenceDepth);
     void SaveGeometryDebugImages(const GeometricWarpResult &result);
@@ -278,6 +281,8 @@ protected:
     int mnGeometryMultiReferencePyramidScale;
     bool mbGeometryMultiReferenceDenseAuditEnabled;
     std::string mGeometryMultiReferenceCsvPath;
+    std::string mGeometryMultiReferenceFeatureCsvPath;
+    std::set<long unsigned int> mGeometryMultiReferenceFeatureFrameFilter;
     std::string mGeometryReferenceSelectionCsvPath;
     std::string mGeometryMultiReferenceDebugOutputDir;
     long unsigned int mnGeometryMultiReferenceComputedFrames;
@@ -297,6 +302,77 @@ protected:
     };
     std::vector<GeometryMultiReferenceHistogramRecord>
         mvGeometryMultiReferenceHistogram;
+
+    struct GeometryMultiReferenceFeatureRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::string samplingPolicy;
+        std::size_t featureIndex;
+        int imageU;
+        int imageV;
+        int octave;
+        bool hasMapPoint;
+        bool currentFrameOutlierFlag;
+        bool semanticNonzero;
+        int nativeScale;
+        int nativeU;
+        int nativeV;
+        unsigned char comparisonCount;
+        unsigned char positiveCount;
+        unsigned char negativeCount;
+        unsigned char consistentCount;
+    };
+    std::vector<GeometryMultiReferenceFeatureRecord>
+        mvGeometryMultiReferenceFeatureDiagnostics;
+
+    // G2-4F1 adjacent-successful-frame sparse ego-flow residual.
+    // Shadow-only: no threshold, class, feature removal, or map mutation.
+    bool mbGeometrySparseEgoFlowShadowEnabled;
+    std::string mGeometrySparseFlowCsvPath;
+    std::set<long unsigned int> mGeometrySparseFlowFrameFilter;
+    long unsigned int mnGeometrySparseFlowComputedFrames;
+
+    struct SparseFlowReference
+    {
+        cv::Mat gray;
+        cv::Mat depthMeters;
+        cv::Mat TcwFinal;
+        cv::Mat TcwGroundTruth;
+        long unsigned int frameId = 0;
+        double timestamp = 0.0;
+        bool valid = false;
+    };
+    SparseFlowReference mSparseFlowReference;
+
+    struct GeometrySparseFlowFeatureRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        long unsigned int referenceFrameId;
+        double referenceTimestamp;
+        int octave;
+        bool hasMapPoint;
+        bool semanticNonzero;
+        GeometricSparseFlowSample sample;
+    };
+    std::vector<GeometrySparseFlowFeatureRecord>
+        mvGeometrySparseFlowFeatureDiagnostics;
+
+    struct GeometrySparseFlowFrameRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        long unsigned int referenceFrameId;
+        double referenceTimestamp;
+        bool referenceAvailable;
+        bool domainValid;
+        double recordMs;
+        double activeTotalMs;
+        GeometricSparseFlowStats stats;
+    };
+    std::vector<GeometrySparseFlowFrameRecord>
+        mvGeometrySparseFlowFrameDiagnostics;
 
     // G2-3R1 fixed-region evidence distributions. Shadow-only.
     bool mbGeometryRegionEvidenceShadowEnabled;

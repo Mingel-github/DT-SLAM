@@ -256,3 +256,65 @@ G1-F / G1-D                               = 继续锁定
 `[S]` 下一小步是不修改 YOLO 地实现 Bonn 自动选帧和 box semantic-coverage
 审计：先判断 box 在现有 semantic mask 中是否被覆盖，再决定哪些像素可称为
 semantic-uncovered geometry evidence。仍不得直接选择动态阈值。
+
+## 9. 可复现运行模板
+
+数据解压与 association：
+
+```bash
+cd /home/zhu/dynaslam_ws
+
+DTSLAM_BONN_TMP=$(mktemp -d /tmp/dtslam_bonn_XXXXXX)
+unzip -q BONN/rgbd_bonn_moving_nonobstructing_box.zip \
+  -d "$DTSLAM_BONN_TMP"
+
+DTSLAM_BONN_DATA="$DTSLAM_BONN_TMP/rgbd_bonn_moving_nonobstructing_box"
+
+python3 DT-SLAM/tools/make_rgbd_association.py \
+  "$DTSLAM_BONN_DATA/rgb.txt" \
+  "$DTSLAM_BONN_DATA/depth.txt" \
+  <fresh-association-output> \
+  --max-difference-ms 20 \
+  --dataset-root "$DTSLAM_BONN_DATA"
+```
+
+150 帧 geometry shadow：
+
+```bash
+cd /home/zhu/dynaslam_ws/DT-SLAM
+
+export DT_SLAM_DISABLE_VIEWER=1
+export DT_SLAM_GEOMETRY_MULTIREF_CSV=<fresh-multiref-csv>
+export DT_SLAM_GEOMETRY_REGION_EVIDENCE_CSV=<fresh-region-csv>
+export LD_LIBRARY_PATH="/home/zhu/dynaslam_ws/pangolin_install/lib:/home/zhu/dynaslam_ws/DT-SLAM/lib:/home/zhu/dynaslam_ws/DT-SLAM/thirdparty/onnxruntime/lib:${LD_LIBRARY_PATH:-}"
+
+./Examples/RGB-D/rgbd_tum \
+  Vocabulary/ORBvoc.txt \
+  Examples/RGB-D/BONN_GeometryPyramidEvidenceShadow.yaml \
+  "$DTSLAM_BONN_DATA" \
+  <(head -n 152 <association-with-two-comment-lines>) \
+  > <fresh-shadow-log> 2>&1
+```
+
+关联文件头的注释行数必须先检查，不能默认 `head -n 150` 就是 150 个 pair。
+
+30 帧 online YOLO 还需设置 host GPU ONNX Runtime：
+
+```bash
+ORT_CAPI=/home/zhu/.local/lib/python3.10/site-packages/onnxruntime/capi
+NVIDIA_BASE=/home/zhu/.local/lib/python3.10/site-packages/nvidia
+NVIDIA_LIBS=$(find "$NVIDIA_BASE" -mindepth 2 -maxdepth 2 -type d -name lib -printf '%p:')
+
+export LD_PRELOAD="$ORT_CAPI/libonnxruntime.so.1.23.2"
+export LD_LIBRARY_PATH="${ORT_CAPI}:${NVIDIA_LIBS}/home/zhu/dynaslam_ws/pangolin_install/lib:/home/zhu/dynaslam_ws/DT-SLAM/lib:${LD_LIBRARY_PATH:-}"
+
+./Examples/RGB-D/rgbd_tum \
+  Vocabulary/ORBvoc.txt \
+  Examples/RGB-D/BONN_GeometryPyramidEvidenceShadow.yaml \
+  "$DTSLAM_BONN_DATA" \
+  <(head -n 32 <association-with-two-comment-lines>) \
+  weights/yolov8n-seg.onnx \
+  > <fresh-yolo-log> 2>&1
+```
+
+这些是复现模板；输出必须使用新路径，不能覆盖本文引用的原始日志。

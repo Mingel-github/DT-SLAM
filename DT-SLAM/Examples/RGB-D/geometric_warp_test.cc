@@ -5,6 +5,7 @@
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 
 #include "GeometricDynamicDetector.h"
 #include "RGBDInputRectifier.h"
@@ -900,6 +901,237 @@ void TestRegionEvidenceAggregation()
             "region evidence aggregate region counts are incorrect");
 }
 
+void TestFeatureEvidenceUsesNativePyramidCells()
+{
+    ORB_SLAM2::GeometricMultiReferenceResult evidence;
+    evidence.comparisonCount = cv::Mat::zeros(4,4,CV_8UC1);
+    evidence.positiveCount = cv::Mat::zeros(4,4,CV_8UC1);
+    evidence.negativeCount = cv::Mat::zeros(4,4,CV_8UC1);
+    evidence.consistentCount = cv::Mat::zeros(4,4,CV_8UC1);
+    evidence.nativeScale = 2;
+    evidence.nativeComparisonCount =
+        (cv::Mat_<unsigned char>(2,2) << 2,1,0,3);
+    evidence.nativePositiveCount =
+        (cv::Mat_<unsigned char>(2,2) << 1,0,0,2);
+    evidence.nativeNegativeCount =
+        (cv::Mat_<unsigned char>(2,2) << 0,1,0,0);
+    evidence.nativeConsistentCount =
+        (cv::Mat_<unsigned char>(2,2) << 1,0,0,1);
+
+    std::vector<cv::Point2f> features;
+    features.push_back(cv::Point2f(0.5f,0.5f));
+    features.push_back(cv::Point2f(1.9f,1.2f));
+    features.push_back(cv::Point2f(2.1f,0.1f));
+    features.push_back(cv::Point2f(3.0f,3.0f));
+    features.push_back(cv::Point2f(-1.0f,0.0f));
+    features.push_back(cv::Point2f(8.0f,8.0f));
+    features.push_back(cv::Point2f(-0.2f,0.5f));
+
+    const std::vector<ORB_SLAM2::GeometricFeatureEvidenceSample>
+        samples =
+            ORB_SLAM2::GeometricDynamicDetector::
+                SampleMultiReferenceEvidenceAtFeatures(
+                    evidence,features);
+    Require(samples.size()==features.size(),
+            "feature evidence must retain every requested feature");
+    Require(samples[0].nativeScale==2 &&
+            samples[0].nativeU==0 &&
+            samples[0].nativeV==0 &&
+            samples[0].comparisonCount==2 &&
+            samples[0].positiveCount==1 &&
+            samples[0].consistentCount==1,
+            "first feature did not read the expected native cell");
+    Require(samples[1].nativeU==0 &&
+            samples[1].nativeV==0 &&
+            samples[1].comparisonCount==samples[0].comparisonCount,
+            "features in one expanded 2x2 block must share one native cell");
+    Require(samples[2].nativeU==1 &&
+            samples[2].nativeV==0 &&
+            samples[2].comparisonCount==1 &&
+            samples[2].negativeCount==1,
+            "feature-to-native-cell mapping is incorrect");
+    Require(samples[3].nativeU==1 &&
+            samples[3].nativeV==1 &&
+            samples[3].comparisonCount==3 &&
+            samples[3].positiveCount==2 &&
+            samples[3].consistentCount==1,
+            "bottom-right native evidence is incorrect");
+    Require(samples[4].nativeU==-1 &&
+            samples[4].nativeV==-1 &&
+            samples[4].comparisonCount==0 &&
+            samples[5].nativeU==-1 &&
+            samples[5].nativeV==-1 &&
+            samples[5].comparisonCount==0 &&
+            samples[6].nativeU==-1 &&
+            samples[6].nativeV==-1 &&
+            samples[6].comparisonCount==0,
+            "out-of-domain features must remain no-evidence");
+}
+
+cv::Mat MakeSparseFlowTexture()
+{
+    cv::Mat image(96,128,CV_8UC1);
+    cv::RNG random(12345);
+    random.fill(image,cv::RNG::UNIFORM,0,255);
+    cv::GaussianBlur(image,image,cv::Size(3,3),0.6);
+    return image;
+}
+
+cv::Mat ShiftImage(
+    const cv::Mat &image,
+    const float deltaX,
+    const float deltaY)
+{
+    cv::Mat shifted;
+    const cv::Mat transform =
+        (cv::Mat_<double>(2,3) <<
+            1.0,0.0,deltaX,0.0,1.0,deltaY);
+    cv::warpAffine(
+        image,shifted,transform,image.size(),
+        cv::INTER_LINEAR,cv::BORDER_REFLECT101);
+    return shifted;
+}
+
+cv::Mat SparseFlowCameraMatrix()
+{
+    cv::Mat K = cv::Mat::eye(3,3,CV_32F);
+    K.at<float>(0,0) = 100.0f;
+    K.at<float>(1,1) = 100.0f;
+    K.at<float>(0,2) = 64.0f;
+    K.at<float>(1,2) = 48.0f;
+    return K;
+}
+
+void TestSparseEgoFlowIdentityAndLkDirection()
+{
+    const cv::Mat reference = MakeSparseFlowTexture();
+    const cv::Mat current = reference.clone();
+    const cv::Mat depth(
+        reference.size(),CV_32FC1,cv::Scalar(2.0f));
+    const std::vector<cv::Point2f> features = {
+        cv::Point2f(30.0f,30.0f),
+        cv::Point2f(64.0f,48.0f),
+        cv::Point2f(90.0f,60.0f)};
+    const ORB_SLAM2::GeometricSparseFlowResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                current,reference,depth,features,
+                IdentityPose(),IdentityPose(),
+                SparseFlowCameraMatrix());
+
+    Require(result.samples.size()==features.size(),
+            "sparse flow must retain every feature");
+    for(std::size_t index=0;
+        index<result.samples.size(); ++index)
+    {
+        const ORB_SLAM2::GeometricSparseFlowSample &sample =
+            result.samples[index];
+        Require(
+            sample.evidenceState==
+                ORB_SLAM2::GeometricSparseFlowEvidenceState::
+                    Measured,
+            "identity sparse flow must be measured");
+        Require(sample.forwardBackwardErrorPixels<0.05f,
+                "identity LK forward-backward error is too large");
+        Require(sample.slamResidualMagnitudePixels<0.05f,
+                "identity ego-flow residual must be zero");
+    }
+}
+
+void TestSparseEgoFlowCameraAndIndependentMotion()
+{
+    const cv::Mat reference = MakeSparseFlowTexture();
+    const cv::Mat current = ShiftImage(reference,2.0f,0.0f);
+    const cv::Mat depth(
+        reference.size(),CV_32FC1,cv::Scalar(2.0f));
+    const std::vector<cv::Point2f> features(
+        1,cv::Point2f(66.0f,48.0f));
+    cv::Mat matchingCameraPose = IdentityPose();
+    matchingCameraPose.at<float>(0,3) = 0.04f;
+
+    const ORB_SLAM2::GeometricSparseFlowResult staticResult =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                current,reference,depth,features,
+                IdentityPose(),matchingCameraPose,
+                SparseFlowCameraMatrix());
+    Require(
+        staticResult.samples[0].evidenceState==
+            ORB_SLAM2::GeometricSparseFlowEvidenceState::
+                Measured &&
+        staticResult.samples[0].slamResidualMagnitudePixels<0.2f,
+        "camera-induced image shift must have near-zero residual");
+
+    const ORB_SLAM2::GeometricSparseFlowResult independentResult =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                current,reference,depth,features,
+                IdentityPose(),IdentityPose(),
+                SparseFlowCameraMatrix(),
+                IdentityPose(),matchingCameraPose);
+    Require(
+        std::fabs(
+            independentResult.samples[0].
+                slamResidualPixels.x-2.0f)<0.2f,
+        "independent pixel displacement has wrong residual sign");
+    Require(
+        independentResult.samples[0].
+            groundTruthProjectionValid &&
+        independentResult.samples[0].
+            groundTruthResidualMagnitudePixels<0.2f,
+        "GT and SLAM sparse-flow pose branches are not independent");
+}
+
+void TestSparseEgoFlowInvalidEvidence()
+{
+    const cv::Mat texture = MakeSparseFlowTexture();
+    cv::Mat invalidDepth(
+        texture.size(),CV_32FC1,cv::Scalar(0.0f));
+    const std::vector<cv::Point2f> feature(
+        1,cv::Point2f(64.0f,48.0f));
+    ORB_SLAM2::GeometricSparseFlowResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                texture,texture,invalidDepth,feature,
+                IdentityPose(),IdentityPose(),
+                SparseFlowCameraMatrix());
+    Require(
+        result.samples[0].evidenceState==
+            ORB_SLAM2::GeometricSparseFlowEvidenceState::
+                DepthInvalid,
+        "invalid reference depth must remain no-evidence");
+
+    cv::Mat validDepth(
+        texture.size(),CV_32FC1,cv::Scalar(2.0f));
+    cv::Mat behindCameraPose = IdentityPose();
+    behindCameraPose.at<float>(2,3) = -3.0f;
+    result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                texture,texture,validDepth,feature,
+                IdentityPose(),behindCameraPose,
+                SparseFlowCameraMatrix());
+    Require(
+        result.samples[0].evidenceState==
+            ORB_SLAM2::GeometricSparseFlowEvidenceState::
+                ProjectionInvalid,
+        "behind-camera projection must remain no-evidence");
+
+    const cv::Mat blank =
+        cv::Mat::zeros(texture.size(),CV_8UC1);
+    result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                blank,blank,validDepth,feature,
+                IdentityPose(),IdentityPose(),
+                SparseFlowCameraMatrix());
+    Require(
+        result.samples[0].evidenceState==
+            ORB_SLAM2::GeometricSparseFlowEvidenceState::
+                LkInvalid,
+        "LK failure must not produce a sparse-flow residual");
+}
+
 } // namespace
 
 int main()
@@ -929,15 +1161,19 @@ int main()
         TestPyramidDepthAndEvidence();
         TestLowResolutionRegionUsesNativeCells();
         TestRegionEvidenceAggregation();
+        TestFeatureEvidenceUsesNativePyramidCells();
+        TestSparseEgoFlowIdentityAndLkDirection();
+        TestSparseEgoFlowCameraAndIndependentMotion();
+        TestSparseEgoFlowInvalidEvidence();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1 Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B Test] PASS"
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1 Test] PASS"
               << std::endl;
     return 0;
 }

@@ -167,6 +167,82 @@ struct GeometricMultiReferenceResult
     GeometricMultiReferenceStats stats;
 };
 
+struct GeometricFeatureEvidenceSample
+{
+    std::size_t featureIndex = 0;
+    int imageU = -1;
+    int imageV = -1;
+    int nativeU = -1;
+    int nativeV = -1;
+    int nativeScale = 1;
+    unsigned char comparisonCount = 0;
+    unsigned char positiveCount = 0;
+    unsigned char negativeCount = 0;
+    unsigned char consistentCount = 0;
+};
+
+enum class GeometricSparseFlowEvidenceState
+{
+    Measured,
+    LkInvalid,
+    DepthInvalid,
+    ProjectionInvalid,
+    DomainInvalid,
+    ReferenceUnavailable
+};
+
+struct GeometricSparseFlowSample
+{
+    std::size_t featureIndex = 0;
+    cv::Point2f currentPixel;
+    cv::Point2f referencePixel;
+    cv::Point2f forwardBackPixel;
+    float backwardLkError = 0.0f;
+    float forwardLkError = 0.0f;
+    float forwardBackwardErrorPixels = 0.0f;
+    float referenceDepthMeters = 0.0f;
+    cv::Point2f slamEgoPixel;
+    cv::Point2f slamResidualPixels;
+    float slamResidualMagnitudePixels = 0.0f;
+    cv::Point2f groundTruthEgoPixel;
+    cv::Point2f groundTruthResidualPixels;
+    float groundTruthResidualMagnitudePixels = 0.0f;
+    bool backwardLkValid = false;
+    bool forwardLkValid = false;
+    bool referenceDepthValid = false;
+    bool slamProjectionValid = false;
+    bool groundTruthPoseAvailable = false;
+    bool groundTruthProjectionValid = false;
+    GeometricSparseFlowEvidenceState evidenceState =
+        GeometricSparseFlowEvidenceState::ReferenceUnavailable;
+};
+
+struct GeometricSparseFlowStats
+{
+    std::size_t featureCount = 0;
+    std::size_t backwardLkValidCount = 0;
+    std::size_t forwardLkValidCount = 0;
+    std::size_t referenceDepthValidCount = 0;
+    std::size_t slamResidualValidCount = 0;
+    std::size_t groundTruthResidualValidCount = 0;
+    double slamResidualMedianPixels = 0.0;
+    double slamResidualP90Pixels = 0.0;
+    double slamResidualP95Pixels = 0.0;
+    double groundTruthResidualMedianPixels = 0.0;
+    double groundTruthResidualP90Pixels = 0.0;
+    double groundTruthResidualP95Pixels = 0.0;
+    double backwardLkMs = 0.0;
+    double forwardLkMs = 0.0;
+    double depthAndProjectionMs = 0.0;
+    double totalMs = 0.0;
+};
+
+struct GeometricSparseFlowResult
+{
+    std::vector<GeometricSparseFlowSample> samples;
+    GeometricSparseFlowStats stats;
+};
+
 struct GeometricRegionPartitionStats
 {
     int domainScale = 1;
@@ -347,6 +423,32 @@ public:
             const int scale,
             const float relativeThreshold,
             const float absoluteThresholdMeters);
+
+    // G2-4F0 shadow-only mapping from raw RGB/depth-domain feature centers
+    // to existing multi-reference evidence. Pyramid-expanded cells are
+    // sampled in their native domain so a 2x2 expansion remains one
+    // measurement.
+    static std::vector<GeometricFeatureEvidenceSample>
+        SampleMultiReferenceEvidenceAtFeatures(
+            const GeometricMultiReferenceResult &evidence,
+            const std::vector<cv::Point2f> &featurePixels);
+
+    // G2-4F1 shadow-only adjacent-frame sparse observed-flow minus
+    // camera-induced RGB-D/SE(3) flow. Raw LK validity and continuous
+    // residuals are returned; no threshold or motion class is produced.
+    static GeometricSparseFlowResult ComputeSparseEgoFlow(
+        const cv::Mat &currentGray,
+        const cv::Mat &referenceGray,
+        const cv::Mat &referenceDepthMeters,
+        const std::vector<cv::Point2f> &currentFeaturePixels,
+        const cv::Mat &TcwReference,
+        const cv::Mat &TcwCurrent,
+        const cv::Mat &K,
+        const cv::Mat &TcwGroundTruthReference = cv::Mat(),
+        const cv::Mat &TcwGroundTruthCurrent = cv::Mat());
+
+    static const char *SparseFlowEvidenceStateName(
+        const GeometricSparseFlowEvidenceState state);
 
     // G2-2R pure selection helper. Candidate frame ids must already be
     // ordered by the caller's reference policy. Missing cache entries remain

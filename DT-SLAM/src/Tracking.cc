@@ -72,6 +72,33 @@ std::string JoinDiagnosticValues(const std::vector<T> &values)
     return stream.str();
 }
 
+std::set<long unsigned int> ParseFrameIdFilter(const char *value)
+{
+    std::set<long unsigned int> frameIds;
+    if(!value || value[0]=='\0')
+        return frameIds;
+
+    std::stringstream stream(value);
+    std::string token;
+    while(std::getline(stream,token,','))
+    {
+        if(token.empty())
+            throw std::invalid_argument(
+                "geometry feature frame filter contains an empty item");
+        char *end = NULL;
+        const unsigned long parsed =
+            std::strtoul(token.c_str(),&end,10);
+        if(end==token.c_str() || *end!='\0')
+        {
+            throw std::invalid_argument(
+                "geometry feature frame filter must contain "
+                "comma-separated non-negative integers");
+        }
+        frameIds.insert(static_cast<long unsigned int>(parsed));
+    }
+    return frameIds;
+}
+
 void LoadGeometryCameraMatrix(const cv::FileStorage &settings,
                               const cv::Mat &trackingK,
                               cv::Mat &geometryK,
@@ -297,6 +324,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mnGeometryMultiReferencePyramidScale(2),
     mbGeometryMultiReferenceDenseAuditEnabled(false),
     mnGeometryMultiReferenceComputedFrames(0),
+    mbGeometrySparseEgoFlowShadowEnabled(false),
+    mnGeometrySparseFlowComputedFrames(0),
     mbGeometryRegionEvidenceShadowEnabled(false),
     mbGeometryRegionRiskDiagnosticsEnabled(false),
     mbGeometryLowResolutionRegionShadowEnabled(false),
@@ -433,6 +462,22 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         throw std::invalid_argument(
             "Geometry.MultiReferenceShadowEnable=1 requires "
             "Geometry.Enable=1");
+    }
+
+    const cv::FileNode geometrySparseEgoFlowEnableNode =
+        fSettings["Geometry.SparseEgoFlowShadowEnable"];
+    if(!geometrySparseEgoFlowEnableNode.empty())
+    {
+        mbGeometrySparseEgoFlowShadowEnabled =
+            static_cast<int>(
+                geometrySparseEgoFlowEnableNode)!=0;
+    }
+    if(mbGeometrySparseEgoFlowShadowEnabled &&
+       (!mbGeometryShadowEnabled || sensor!=System::RGBD))
+    {
+        throw std::invalid_argument(
+            "Geometry.SparseEgoFlowShadowEnable=1 requires "
+            "Geometry.Enable=1 and RGB-D input");
     }
 
     const cv::FileNode jiGeometryEnableNode =
@@ -760,6 +805,28 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         std::getenv("DT_SLAM_GEOMETRY_MULTIREF_CSV");
     if(multiReferenceCsv && multiReferenceCsv[0]!='\0')
         mGeometryMultiReferenceCsvPath = multiReferenceCsv;
+    const char *multiReferenceFeatureCsv =
+        std::getenv("DT_SLAM_GEOMETRY_MULTIREF_FEATURE_CSV");
+    if(multiReferenceFeatureCsv &&
+       multiReferenceFeatureCsv[0]!='\0')
+    {
+        mGeometryMultiReferenceFeatureCsvPath =
+            multiReferenceFeatureCsv;
+        mGeometryMultiReferenceFeatureFrameFilter =
+            ParseFrameIdFilter(
+                std::getenv(
+                    "DT_SLAM_GEOMETRY_MULTIREF_FEATURE_FRAME_IDS"));
+    }
+    const char *sparseFlowCsv =
+        std::getenv("DT_SLAM_GEOMETRY_SPARSE_FLOW_CSV");
+    if(sparseFlowCsv && sparseFlowCsv[0]!='\0')
+    {
+        mGeometrySparseFlowCsvPath = sparseFlowCsv;
+        mGeometrySparseFlowFrameFilter =
+            ParseFrameIdFilter(
+                std::getenv(
+                    "DT_SLAM_GEOMETRY_SPARSE_FLOW_FRAME_IDS"));
+    }
     const char *referenceSelectionCsv =
         std::getenv("DT_SLAM_GEOMETRY_REFERENCE_SELECTION_CSV");
     if(referenceSelectionCsv && referenceSelectionCsv[0]!='\0')
@@ -1330,6 +1397,283 @@ void Tracking::SaveGeometryPoseDiagnostics()
         }
     }
 
+    if(!mGeometryMultiReferenceFeatureCsvPath.empty() &&
+       !mvGeometryMultiReferenceFeatureDiagnostics.empty())
+    {
+        ofstream stream(
+            mGeometryMultiReferenceFeatureCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-4F0] failed to open feature evidence CSV: "
+                 << mGeometryMultiReferenceFeatureCsvPath << endl;
+        }
+        else
+        {
+            stream << "frame,timestamp,sampling_policy,feature_index,"
+                   << "u_raw,v_raw,octave,has_mappoint,"
+                   << "current_frame_outlier_flag,semantic_nonzero,native_scale,"
+                   << "native_u,native_v,comparison_count,"
+                   << "positive_count,negative_count,consistent_count\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<mvGeometryMultiReferenceFeatureDiagnostics.size();
+                ++index)
+            {
+                const GeometryMultiReferenceFeatureRecord &record =
+                    mvGeometryMultiReferenceFeatureDiagnostics[index];
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.samplingPolicy << ","
+                       << record.featureIndex << ","
+                       << record.imageU << ","
+                       << record.imageV << ","
+                       << record.octave << ","
+                       << (record.hasMapPoint ? 1 : 0) << ","
+                       << (record.currentFrameOutlierFlag ? 1 : 0) << ","
+                       << (record.semanticNonzero ? 1 : 0) << ","
+                       << record.nativeScale << ","
+                       << record.nativeU << ","
+                       << record.nativeV << ","
+                       << static_cast<int>(record.comparisonCount) << ","
+                       << static_cast<int>(record.positiveCount) << ","
+                       << static_cast<int>(record.negativeCount) << ","
+                       << static_cast<int>(record.consistentCount) << "\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-4F0] saved "
+                 << mvGeometryMultiReferenceFeatureDiagnostics.size()
+                 << " feature evidence rows to "
+                 << mGeometryMultiReferenceFeatureCsvPath << endl;
+        }
+    }
+
+    if(!mGeometrySparseFlowCsvPath.empty() &&
+       !mvGeometrySparseFlowFeatureDiagnostics.empty())
+    {
+        ofstream stream(mGeometrySparseFlowCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-4F1] failed to open sparse-flow CSV: "
+                 << mGeometrySparseFlowCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,reference_frame,"
+                << "reference_timestamp,dt_seconds,feature_index,"
+                << "u_current,v_current,octave,has_mappoint,"
+                << "semantic_nonzero,backward_lk_status,"
+                << "forward_lk_status,u_reference,v_reference,"
+                << "u_forward_back,v_forward_back,"
+                << "lk_error_backward,lk_error_forward,"
+                << "forward_backward_error_px,"
+                << "reference_depth_valid,reference_depth_m,"
+                << "slam_ego_projection_valid,slam_u_ego,"
+                << "slam_v_ego,slam_residual_x_px,"
+                << "slam_residual_y_px,"
+                << "slam_residual_magnitude_px,"
+                << "gt_pose_available,gt_ego_projection_valid,"
+                << "gt_u_ego,gt_v_ego,gt_residual_x_px,"
+                << "gt_residual_y_px,"
+                << "gt_residual_magnitude_px,evidence_state\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometrySparseFlowFeatureDiagnostics.size();
+                ++index)
+            {
+                const GeometrySparseFlowFeatureRecord &record =
+                    mvGeometrySparseFlowFeatureDiagnostics[index];
+                const GeometricSparseFlowSample &sample =
+                    record.sample;
+                const bool hasReference =
+                    sample.evidenceState!=
+                    GeometricSparseFlowEvidenceState::
+                        ReferenceUnavailable;
+                stream << record.frameId << ","
+                       << record.timestamp << ",";
+                if(hasReference)
+                {
+                    stream << record.referenceFrameId << ","
+                           << record.referenceTimestamp << ","
+                           << record.timestamp-
+                              record.referenceTimestamp << ",";
+                }
+                else
+                {
+                    stream << ",,,";
+                }
+                stream << sample.featureIndex << ","
+                       << sample.currentPixel.x << ","
+                       << sample.currentPixel.y << ","
+                       << record.octave << ","
+                       << (record.hasMapPoint ? 1 : 0) << ","
+                       << (record.semanticNonzero ? 1 : 0) << ","
+                       << (sample.backwardLkValid ? 1 : 0) << ","
+                       << (sample.forwardLkValid ? 1 : 0) << ",";
+                if(sample.backwardLkValid)
+                {
+                    stream << sample.referencePixel.x << ","
+                           << sample.referencePixel.y << ",";
+                }
+                else
+                {
+                    stream << ",,";
+                }
+                if(sample.forwardLkValid)
+                {
+                    stream << sample.forwardBackPixel.x << ","
+                           << sample.forwardBackPixel.y << ",";
+                }
+                else
+                {
+                    stream << ",,";
+                }
+                if(sample.backwardLkValid)
+                    stream << sample.backwardLkError;
+                stream << ",";
+                if(sample.forwardLkValid)
+                    stream << sample.forwardLkError;
+                stream << ",";
+                if(sample.backwardLkValid &&
+                   sample.forwardLkValid)
+                {
+                    stream
+                        << sample.forwardBackwardErrorPixels;
+                }
+                stream << ","
+                       << (sample.referenceDepthValid ? 1 : 0)
+                       << ",";
+                if(sample.referenceDepthValid)
+                    stream << sample.referenceDepthMeters;
+                stream << ","
+                       << (sample.slamProjectionValid ? 1 : 0)
+                       << ",";
+                if(sample.slamProjectionValid)
+                {
+                    stream << sample.slamEgoPixel.x << ","
+                           << sample.slamEgoPixel.y << ","
+                           << sample.slamResidualPixels.x << ","
+                           << sample.slamResidualPixels.y << ","
+                           << sample.slamResidualMagnitudePixels;
+                }
+                else
+                {
+                    stream << ",,,,";
+                }
+                stream << ","
+                       << (sample.groundTruthPoseAvailable ? 1 : 0)
+                       << ","
+                       << (sample.groundTruthProjectionValid ? 1 : 0)
+                       << ",";
+                if(sample.groundTruthProjectionValid)
+                {
+                    stream
+                        << sample.groundTruthEgoPixel.x << ","
+                        << sample.groundTruthEgoPixel.y << ","
+                        << sample.groundTruthResidualPixels.x << ","
+                        << sample.groundTruthResidualPixels.y << ","
+                        << sample.groundTruthResidualMagnitudePixels;
+                }
+                else
+                {
+                    stream << ",,,,";
+                }
+                stream << ","
+                       << GeometricDynamicDetector::
+                          SparseFlowEvidenceStateName(
+                              sample.evidenceState)
+                       << "\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-4F1] saved "
+                 << mvGeometrySparseFlowFeatureDiagnostics.size()
+                 << " sparse-flow feature rows to "
+                 << mGeometrySparseFlowCsvPath << endl;
+        }
+    }
+
+    if(!mGeometrySparseFlowCsvPath.empty() &&
+       !mvGeometrySparseFlowFrameDiagnostics.empty())
+    {
+        const std::string frameCsvPath =
+            mGeometrySparseFlowCsvPath+".frames.csv";
+        ofstream stream(frameCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-4F1] failed to open sparse-flow "
+                 << "frame CSV: " << frameCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,reference_frame,"
+                << "reference_timestamp,dt_seconds,"
+                << "reference_available,domain_valid,features,"
+                << "backward_lk_valid,forward_lk_valid,"
+                << "reference_depth_valid,slam_residual_valid,"
+                << "gt_residual_valid,slam_residual_median_px,"
+                << "slam_residual_p90_px,slam_residual_p95_px,"
+                << "gt_residual_median_px,"
+                << "gt_residual_p90_px,gt_residual_p95_px,"
+                << "backward_lk_ms,forward_lk_ms,"
+                << "depth_projection_ms,record_ms,"
+                << "compute_total_ms,active_total_ms,"
+                << "dynamic_decision,"
+                << "direct_slam_state_mutation\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<mvGeometrySparseFlowFrameDiagnostics.size();
+                ++index)
+            {
+                const GeometrySparseFlowFrameRecord &record =
+                    mvGeometrySparseFlowFrameDiagnostics[index];
+                const GeometricSparseFlowStats &stats =
+                    record.stats;
+                stream << record.frameId << ","
+                       << record.timestamp << ",";
+                if(record.referenceAvailable)
+                {
+                    stream << record.referenceFrameId << ","
+                           << record.referenceTimestamp << ","
+                           << record.timestamp-
+                              record.referenceTimestamp << ",";
+                }
+                else
+                {
+                    stream << ",,,";
+                }
+                stream
+                    << (record.referenceAvailable ? 1 : 0)
+                    << ","
+                    << (record.domainValid ? 1 : 0) << ","
+                    << stats.featureCount << ","
+                    << stats.backwardLkValidCount << ","
+                    << stats.forwardLkValidCount << ","
+                    << stats.referenceDepthValidCount << ","
+                    << stats.slamResidualValidCount << ","
+                    << stats.groundTruthResidualValidCount << ","
+                    << stats.slamResidualMedianPixels << ","
+                    << stats.slamResidualP90Pixels << ","
+                    << stats.slamResidualP95Pixels << ","
+                    << stats.groundTruthResidualMedianPixels << ","
+                    << stats.groundTruthResidualP90Pixels << ","
+                    << stats.groundTruthResidualP95Pixels << ","
+                    << stats.backwardLkMs << ","
+                    << stats.forwardLkMs << ","
+                    << stats.depthAndProjectionMs << ","
+                    << record.recordMs << ","
+                    << stats.totalMs << ","
+                    << record.activeTotalMs << ",none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-4F1] saved "
+                 << mvGeometrySparseFlowFrameDiagnostics.size()
+                 << " sparse-flow frame rows to "
+                 << frameCsvPath << endl;
+        }
+    }
+
     if(!mGeometryRegionEvidenceCsvPath.empty() &&
        !mvGeometryRegionEvidenceDiagnostics.empty())
     {
@@ -1707,6 +2051,9 @@ void Tracking::SaveGeometryPoseDiagnostics()
     mvGeometrySemanticProxyDiagnostics.clear();
     mvGeometryFeatureShadowDiagnostics.clear();
     mvGeometryMultiReferenceHistogram.clear();
+    mvGeometryMultiReferenceFeatureDiagnostics.clear();
+    mvGeometrySparseFlowFeatureDiagnostics.clear();
+    mvGeometrySparseFlowFrameDiagnostics.clear();
     mvGeometryRegionEvidenceDiagnostics.clear();
     mvGeometryReferenceSelectionDiagnostics.clear();
     mvJiGeometryClusterDiagnostics.clear();
@@ -1785,7 +2132,9 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
     if((fabs(mDepthMapFactor-1.0f)>1e-5) || imDepth.type()!=CV_32F)
         imDepth.convertTo(imDepth,CV_32F,mDepthMapFactor);
 
-    if(mbGeometryShadowEnabled || mbJiGeometryShadowEnabled)
+    if(mbGeometryShadowEnabled ||
+       mbGeometrySparseEgoFlowShadowEnabled ||
+       mbJiGeometryShadowEnabled)
         mCurrentDepthMeters = imDepth;
     if((mbGeometryShadowEnabled && mbGeometryDebugSaveEnabled) ||
        (mbJiGeometryShadowEnabled && mbJiGeometryDebugSaveEnabled))
@@ -1863,6 +2212,20 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
         }
     }
 
+    if(mbGeometrySparseEgoFlowShadowEnabled)
+    {
+        if(mState==OK && !mCurrentFrame.mTcw.empty())
+            UpdateSparseEgoFlowReference();
+        else
+        {
+            mSparseFlowReference.gray.release();
+            mSparseFlowReference.depthMeters.release();
+            mSparseFlowReference.TcwFinal.release();
+            mSparseFlowReference.TcwGroundTruth.release();
+            mSparseFlowReference.valid = false;
+        }
+    }
+
     mCurrentGeometryDebugImage.release();
     return mCurrentFrame.mTcw.clone();
 }
@@ -1901,6 +2264,210 @@ int Tracking::RemoveDynamicAssociations(Frame &frame)
         }
     }
     return removed;
+}
+
+void Tracking::RunSparseEgoFlowShadow()
+{
+    if(!mbGeometrySparseEgoFlowShadowEnabled ||
+       mSensor!=System::RGBD ||
+       mCurrentFrame.mTcw.empty())
+    {
+        return;
+    }
+
+    const std::chrono::steady_clock::time_point activeStart =
+        std::chrono::steady_clock::now();
+    const bool referenceAvailable =
+        mSparseFlowReference.valid &&
+        mSparseFlowReference.frameId+1==mCurrentFrame.mnId &&
+        mCurrentFrame.mTimeStamp>
+            mSparseFlowReference.timestamp;
+    const bool domainValid =
+        cv::norm(mDistCoef,cv::NORM_INF)<=1e-8 &&
+        mImGray.type()==CV_8UC1 &&
+        (!referenceAvailable ||
+         (mSparseFlowReference.gray.type()==CV_8UC1 &&
+          mSparseFlowReference.depthMeters.type()==CV_32FC1 &&
+          mSparseFlowReference.gray.size()==mImGray.size() &&
+          mSparseFlowReference.depthMeters.size()==mImGray.size()));
+
+    std::vector<cv::Point2f> currentPixels;
+    currentPixels.reserve(mCurrentFrame.mvKeys.size());
+    for(std::size_t index=0;
+        index<mCurrentFrame.mvKeys.size(); ++index)
+    {
+        currentPixels.push_back(
+            mCurrentFrame.mvKeys[index].pt);
+    }
+
+    GeometricSparseFlowResult result;
+    result.stats.featureCount = currentPixels.size();
+    if(referenceAvailable && domainValid)
+    {
+        const bool pairedGroundTruth =
+            !mSparseFlowReference.TcwGroundTruth.empty() &&
+            !mCurrentGroundTruthTcw.empty();
+        result =
+            GeometricDynamicDetector::ComputeSparseEgoFlow(
+                mImGray,mSparseFlowReference.gray,
+                mSparseFlowReference.depthMeters,
+                currentPixels,
+                mSparseFlowReference.TcwFinal,
+                mCurrentFrame.mTcw,mGeometryK,
+                pairedGroundTruth
+                    ? mSparseFlowReference.TcwGroundTruth
+                    : cv::Mat(),
+                pairedGroundTruth
+                    ? mCurrentGroundTruthTcw
+                    : cv::Mat());
+    }
+    else
+    {
+        result.samples.resize(currentPixels.size());
+        for(std::size_t index=0;
+            index<currentPixels.size(); ++index)
+        {
+            result.samples[index].featureIndex = index;
+            result.samples[index].currentPixel =
+                currentPixels[index];
+            result.samples[index].evidenceState =
+                referenceAvailable
+                ? GeometricSparseFlowEvidenceState::DomainInvalid
+                : GeometricSparseFlowEvidenceState::
+                    ReferenceUnavailable;
+        }
+    }
+
+    const bool recordFeatures =
+        !mGeometrySparseFlowCsvPath.empty() &&
+        (mGeometrySparseFlowFrameFilter.empty() ||
+         mGeometrySparseFlowFrameFilter.count(
+             mCurrentFrame.mnId)>0);
+    const std::chrono::steady_clock::time_point recordStart =
+        std::chrono::steady_clock::now();
+    if(recordFeatures)
+    {
+        mvGeometrySparseFlowFeatureDiagnostics.reserve(
+            mvGeometrySparseFlowFeatureDiagnostics.size()+
+            result.samples.size());
+        for(std::size_t index=0;
+            index<result.samples.size(); ++index)
+        {
+            GeometrySparseFlowFeatureRecord record;
+            record.frameId = mCurrentFrame.mnId;
+            record.timestamp = mCurrentFrame.mTimeStamp;
+            record.referenceFrameId =
+                referenceAvailable
+                ? mSparseFlowReference.frameId : 0;
+            record.referenceTimestamp =
+                referenceAvailable
+                ? mSparseFlowReference.timestamp : 0.0;
+            record.octave =
+                index<mCurrentFrame.mvKeys.size()
+                ? mCurrentFrame.mvKeys[index].octave : -1;
+            record.hasMapPoint =
+                index<mCurrentFrame.mvpMapPoints.size() &&
+                mCurrentFrame.mvpMapPoints[index]!=NULL;
+            record.semanticNonzero =
+                index<mCurrentFrame.mvbSemanticDynamic.size() &&
+                mCurrentFrame.mvbSemanticDynamic[index]!=0;
+            record.sample = result.samples[index];
+            mvGeometrySparseFlowFeatureDiagnostics.push_back(
+                record);
+        }
+    }
+    const double recordMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-recordStart).count();
+    const double activeTotalMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-activeStart).count();
+
+    if(!mGeometrySparseFlowCsvPath.empty())
+    {
+        GeometrySparseFlowFrameRecord frameRecord;
+        frameRecord.frameId = mCurrentFrame.mnId;
+        frameRecord.timestamp = mCurrentFrame.mTimeStamp;
+        frameRecord.referenceFrameId =
+            referenceAvailable
+            ? mSparseFlowReference.frameId : 0;
+        frameRecord.referenceTimestamp =
+            referenceAvailable
+            ? mSparseFlowReference.timestamp : 0.0;
+        frameRecord.referenceAvailable = referenceAvailable;
+        frameRecord.domainValid = domainValid;
+        frameRecord.recordMs = recordMs;
+        frameRecord.activeTotalMs = activeTotalMs;
+        frameRecord.stats = result.stats;
+        mvGeometrySparseFlowFrameDiagnostics.push_back(
+            frameRecord);
+    }
+
+    ++mnGeometrySparseFlowComputedFrames;
+    if(mnGeometrySparseFlowComputedFrames==1 ||
+       mnGeometrySparseFlowComputedFrames%
+           static_cast<long unsigned int>(
+               mnGeometryLogEveryN)==0)
+    {
+        cout << "[Geometry G2-4F1] frame="
+             << mCurrentFrame.mnId
+             << " ref="
+             << (referenceAvailable
+                 ? std::to_string(
+                       mSparseFlowReference.frameId)
+                 : "none")
+             << " features=" << result.stats.featureCount
+             << " backward_lk="
+             << result.stats.backwardLkValidCount
+             << " forward_lk="
+             << result.stats.forwardLkValidCount
+             << " depth_valid="
+             << result.stats.referenceDepthValidCount
+             << " measured="
+             << result.stats.slamResidualValidCount
+             << " gt_measured="
+             << result.stats.groundTruthResidualValidCount
+             << " median_px="
+             << result.stats.slamResidualMedianPixels
+             << " p90_px="
+             << result.stats.slamResidualP90Pixels
+             << " p95_px="
+             << result.stats.slamResidualP95Pixels
+             << " active_ms=" << activeTotalMs
+             << " dynamic_decision=none"
+             << " direct_slam_state_mutation=none"
+             << endl;
+    }
+}
+
+void Tracking::UpdateSparseEgoFlowReference()
+{
+    if(!mbGeometrySparseEgoFlowShadowEnabled ||
+       mImGray.empty() ||
+       mCurrentDepthMeters.empty() ||
+       mCurrentFrame.mTcw.empty())
+    {
+        mSparseFlowReference.valid = false;
+        return;
+    }
+
+    mSparseFlowReference.gray = mImGray.clone();
+    mSparseFlowReference.depthMeters =
+        mCurrentDepthMeters.clone();
+    if(!mCurrentFrame.mSemanticMask.empty())
+    {
+        mSparseFlowReference.depthMeters.setTo(
+            0.0f,mCurrentFrame.mSemanticMask);
+    }
+    mSparseFlowReference.TcwFinal =
+        mCurrentFrame.mTcw.clone();
+    mSparseFlowReference.TcwGroundTruth =
+        mCurrentGroundTruthTcw.empty()
+        ? cv::Mat() : mCurrentGroundTruthTcw.clone();
+    mSparseFlowReference.frameId = mCurrentFrame.mnId;
+    mSparseFlowReference.timestamp =
+        mCurrentFrame.mTimeStamp;
+    mSparseFlowReference.valid = true;
 }
 
 void Tracking::RunGeometryShadow()
@@ -2408,6 +2975,72 @@ void Tracking::RunMultiReferenceGeometryShadow()
     selectionRecord.evidenceComputed = true;
     selectionRecord.perReference = result.perReference;
     ++mnGeometryMultiReferenceComputedFrames;
+
+    if(!mGeometryMultiReferenceFeatureCsvPath.empty() &&
+       (mGeometryMultiReferenceFeatureFrameFilter.empty() ||
+        mGeometryMultiReferenceFeatureFrameFilter.count(
+            mCurrentFrame.mnId)>0))
+    {
+        std::vector<cv::Point2f> featurePixels;
+        featurePixels.reserve(mCurrentFrame.mvKeys.size());
+        for(std::size_t featureIndex=0;
+            featureIndex<mCurrentFrame.mvKeys.size(); ++featureIndex)
+        {
+            featurePixels.push_back(
+                mCurrentFrame.mvKeys[featureIndex].pt);
+        }
+        const std::vector<GeometricFeatureEvidenceSample> samples =
+            GeometricDynamicDetector::
+                SampleMultiReferenceEvidenceAtFeatures(
+                    result,featurePixels);
+        const bool hasSemantic =
+            !mCurrentFrame.mSemanticMask.empty() &&
+            mCurrentFrame.mSemanticMask.type()==CV_8UC1 &&
+            mCurrentFrame.mSemanticMask.size()==
+                result.comparisonCount.size();
+        for(std::size_t sampleIndex=0;
+            sampleIndex<samples.size(); ++sampleIndex)
+        {
+            const GeometricFeatureEvidenceSample &sample =
+                samples[sampleIndex];
+            GeometryMultiReferenceFeatureRecord record;
+            record.frameId = mCurrentFrame.mnId;
+            record.timestamp = mCurrentFrame.mTimeStamp;
+            record.samplingPolicy = samplingPolicyLabel;
+            record.featureIndex = sample.featureIndex;
+            record.imageU = sample.imageU;
+            record.imageV = sample.imageV;
+            record.octave =
+                mCurrentFrame.mvKeys[sample.featureIndex].octave;
+            record.hasMapPoint =
+                sample.featureIndex<
+                    mCurrentFrame.mvpMapPoints.size() &&
+                mCurrentFrame.mvpMapPoints[sample.featureIndex]!=NULL;
+            record.currentFrameOutlierFlag =
+                sample.featureIndex<
+                    mCurrentFrame.mvbOutlier.size() &&
+                mCurrentFrame.mvbOutlier[sample.featureIndex];
+            record.semanticNonzero =
+                hasSemantic &&
+                sample.imageU>=0 &&
+                sample.imageV>=0 &&
+                sample.imageU<
+                    mCurrentFrame.mSemanticMask.cols &&
+                sample.imageV<
+                    mCurrentFrame.mSemanticMask.rows &&
+                mCurrentFrame.mSemanticMask.at<unsigned char>(
+                    sample.imageV,sample.imageU)!=0;
+            record.nativeScale = sample.nativeScale;
+            record.nativeU = sample.nativeU;
+            record.nativeV = sample.nativeV;
+            record.comparisonCount = sample.comparisonCount;
+            record.positiveCount = sample.positiveCount;
+            record.negativeCount = sample.negativeCount;
+            record.consistentCount = sample.consistentCount;
+            mvGeometryMultiReferenceFeatureDiagnostics.push_back(
+                record);
+        }
+    }
 
     GeometricMultiReferenceResult denseAuditResult;
     bool hasDenseAuditResult = false;
@@ -3559,6 +4192,7 @@ void Tracking::Track()
             if(mJiInitialTcw.empty())
                 CaptureJiInitialTrackingSnapshot();
             RunGeometryShadow();
+            RunSparseEgoFlowShadow();
         }
 
         if(!mbOnlyTracking)
@@ -4736,11 +5370,20 @@ void Tracking::Reset()
     mvGeometrySemanticProxyDiagnostics.clear();
     mvGeometryFeatureShadowDiagnostics.clear();
     mvGeometryMultiReferenceHistogram.clear();
+    mvGeometryMultiReferenceFeatureDiagnostics.clear();
+    mvGeometrySparseFlowFeatureDiagnostics.clear();
+    mvGeometrySparseFlowFrameDiagnostics.clear();
     mvGeometryRegionEvidenceDiagnostics.clear();
     mvGeometryReferenceSelectionDiagnostics.clear();
     mqGeometryKeyframeReferences.clear();
+    mSparseFlowReference.gray.release();
+    mSparseFlowReference.depthMeters.release();
+    mSparseFlowReference.TcwFinal.release();
+    mSparseFlowReference.TcwGroundTruth.release();
+    mSparseFlowReference.valid = false;
     mnGeometryComputedFrames = 0;
     mnGeometryMultiReferenceComputedFrames = 0;
+    mnGeometrySparseFlowComputedFrames = 0;
     mnGeometryRegionEvidenceComputedFrames = 0;
 
     if(mpInitializer)
