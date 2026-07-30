@@ -140,8 +140,16 @@ def load_rectification(config_path, image_size):
     )
 
 
-def load_rectified_images(dataset_root, associations, config):
-    if SEALED_HOLDOUT_NAME in str(dataset_root):
+def load_rectified_images(
+    dataset_root,
+    associations,
+    config,
+    allow_unsealed_holdout=False,
+):
+    if (
+        SEALED_HOLDOUT_NAME in str(dataset_root)
+        and not allow_unsealed_holdout
+    ):
         raise ValueError("refusing to access sealed strict hold-out")
     images = []
     thumbnails = []
@@ -275,7 +283,10 @@ def select_candidates(args):
         raise ValueError("semantic manifest does not cover every frame")
 
     images, thumbnails = load_rectified_images(
-        args.dataset_root, associations, args.config
+        args.dataset_root,
+        associations,
+        args.config,
+        args.allow_unsealed_holdout,
     )
     existing = set()
     if args.existing_candidates:
@@ -430,7 +441,7 @@ def select_candidates(args):
         "identity": "RGB/semantic-only development review candidates",
         "is_ground_truth": False,
         "geometry_or_flow_read": False,
-        "strict_holdout_opened": False,
+        "strict_holdout_opened": bool(args.allow_unsealed_holdout),
         "association_frames": len(associations),
         "person_absent_center_frames": len(center_absent),
         "person_absent_full_window_frames": len(full_window_absent),
@@ -502,6 +513,14 @@ def main():
         help=(
             "screen all eligible RGB frames, including person-present "
             "frames; selection still does not read geometry or flow"
+        ),
+    )
+    select.add_argument(
+        "--allow-unsealed-holdout",
+        action="store_true",
+        help=(
+            "allow access only after an external frozen holdout protocol "
+            "has formally unsealed the dataset; selection logic is unchanged"
         ),
     )
 

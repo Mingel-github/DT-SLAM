@@ -786,3 +786,65 @@ results/g2_4f1_expansion_2026-07-29/G2_4F1_INDEPENDENT_CANDIDATE_EXPANSION_RESUL
 进入 G1-F0 mutation shadow。
 
 这份交接的目的不是让新会话“相信摘要”，而是让它知道去哪里核查、哪些结论已经冻结、哪些结果仍是假设，以及下一步只能改动什么。
+
+---
+
+## 12. 2026-07-30 当前状态覆盖更新
+
+本节覆盖前文仍写着 `balloon_tracking sealed` 的旧状态。
+
+### 12.1 当前版本与留出状态
+
+```text
+pre-holdout freeze commit:
+  f964cf0 Freeze reliable sparse-flow candidate gate
+balloon_tracking:
+  formally opened and evaluated once
+threshold retuning:
+  none
+G1-F0 / G1-F / G1-D:
+  locked
+```
+
+### 12.2 Strict holdout 结论
+
+14 个在 geometry 前冻结的 RGB-only moving proxy 均有 exact-zero person
+mask。冻结 `FB<=0.25,q>=10` 只在 7/14 帧产生框内 candidate，7/14 帧
+inside rate 高于 outside；全序列 MapPoint candidate rate 为 `0.2248%`。
+对应门为 `80%/80%/<=0.20%`，所以 G2-4F2 strict gate 失败，禁止在该
+holdout 上回调阈值。
+
+连续 residual 仍在 13/14 帧表现为框内中位高于框外。因此保留 F1 连续证据，
+冻结 `q>=10` 为失败 baseline，不将它写成 `dynamic=true`。
+
+### 12.3 性能记录修正
+
+首次 holdout 开启完整 feature CSV 时发现每帧
+`reserve(current_size+samples)` 导致 O(N²) 诊断记录搬移。本次 24.00 FPS
+不代表算法本体。删除该 reserve 后在非 holdout static150 验证 F1 约
+2.7–2.9 ms、29.72 FPS、0 deadline miss；按协议没有重跑 holdout。
+
+### 12.4 当前下一步
+
+先读：
+
+```text
+results/g2_4f2_holdout_2026-07-30/G2_4F2H_STRICT_HOLDOUT_RESULT.md
+results/g2_4f2_holdout_2026-07-30/G2_4F3_LOCAL_RIGIDITY_LITERATURE_DECISION.md
+results/g2_4f3_2026-07-30/G2_4F3_LOCAL_RIGIDITY_COHERENCE_SHADOW_SPEC.md
+```
+
+然后只允许：
+
+```text
+G2-4F3 SPEC:
+  two-frame local feature graph
+  relative 3D edge-length consistency
+  continuous ego-flow residual kept separate
+  shadow-only edge/component statistics
+```
+
+来源是 Dai 等 point-correlation 原理的局部适配 `[A]`，并受
+SInDSLAM/DetectFusion“residual 需要空间上下文”的证据支持。禁止复制完整
+graph optimization、禁止最大组静态假设、禁止修改 Optimizer/g2o、禁止根据
+已打开 holdout 选阈值。

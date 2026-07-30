@@ -2365,9 +2365,6 @@ void Tracking::RunSparseEgoFlowShadow()
         std::chrono::steady_clock::now();
     if(recordFeatures)
     {
-        mvGeometrySparseFlowFeatureDiagnostics.reserve(
-            mvGeometrySparseFlowFeatureDiagnostics.size()+
-            result.samples.size());
         for(std::size_t index=0;
             index<result.samples.size(); ++index)
         {
