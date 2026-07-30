@@ -609,8 +609,19 @@ G2-4F1 自身中位成本约 `2.5 ms`，完整系统约 `29.27/29.70 FPS`。但�
 RGB/semantic 扩充又审查了 50 个时间窗，得到
 stationary/moving/uncertain=`48/0/2`。所以当前科学门不可评价，G1 仍锁定。
 
-下一小步应先选择一条非 strict-hold-out、保留静态背景且未知物体运动可观察
-的 development 数据；不能继续在当前样本上拟合 flow/depth 阈值。
+随后 G2-4F1D 已用 balloon/balloon2 非 holdout 数据补齐方向性开发证据；
+G2-4F2 已完成本地文献审计、TUM/Bonn 真静态跨域风险、depth
+boundary/invalid 分层和保守工作点冻结。`FB<=0.25, q>=10` 只定义
+`high_residual_candidate`，不是 dynamic。TUM/Bonn 静态 candidate rate 为
+`0.232%/0.546%`，MapPoint candidate rate 为 `0.068%/0.117%`。
+
+边界分层没有解释 Bonn 的主要静态尾部：`q=10` 时 75.2% 候选仍在
+`clean_d2`，因此没有加入 boundary veto。GT-pose 归一化尾部更低，但 raw
+residual 更高，只能说明 pose 分支相关风险，不能作因果结论。
+
+下一小步是先固定当前代码 commit，再按已写入的 F2D 协议一次性打开
+`balloon_tracking` strict holdout。打开后不得根据结果回调 `FB/q`，且即使
+通过也只能进入 G1-F0 mutation shadow，不能直接真实过滤。
 
 G2-4F0 文档：
 
@@ -672,6 +683,11 @@ results/g2_4f1_expansion_2026-07-29/G2_4F1_INDEPENDENT_CANDIDATE_EXPANSION_RESUL
    results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_SHADOW_SPEC.md
    results/g2_4f_2026-07-29/G2_4F1_SPARSE_EGO_FLOW_SHADOW_RESULT.md
    results/g2_4f1_expansion_2026-07-29/G2_4F1_INDEPENDENT_CANDIDATE_EXPANSION_RESULT.md
+   results/g2_4f2_2026-07-30/G2_4F2_RELIABLE_FEATURE_GATE_LITERATURE_AUDIT.md
+   results/g2_4f2_2026-07-30/G2_4F2_RELIABLE_FEATURE_GATE_SHADOW_SPEC.md
+   results/g2_4f2_2026-07-30/G2_4F2B_DEPTH_BOUNDARY_RISK_SHADOW_SPEC.md
+   results/g2_4f2_2026-07-30/G2_4F2B_DEPTH_BOUNDARY_RISK_SHADOW_RESULT.md
+   results/g2_4f2_2026-07-30/G2_4F2D_CANDIDATE_WORKING_POINT_FREEZE_AND_HOLDOUT_PROTOCOL.md
    results/ate_semantic_baseline_2026-07-29/REPORT.md
    ```
 
@@ -689,9 +705,10 @@ results/g2_4f1_expansion_2026-07-29/G2_4F1_INDEPENDENT_CANDIDATE_EXPANSION_RESUL
    未通过；G2-4F1 在原 moving-box 数据上不可评价，但 F1D 已在非 holdout
    balloon/balloon2 上得到独立于 flow 的可观察 motion proxy 和明确方向性
    residual；
-9. 确认 `rgbd_bonn_balloon_tracking.zip` 仍保持封存状态；下一轮先从本地
-   PaperNotes/PDF 核对可靠 feature gate 与静态风险协议。不得直接融合
-   evidence、把当前中位数写成阈值、解封 hold-out 或进入 G1。
+9. 确认 `rgbd_bonn_balloon_tracking.zip` 的 SHA-256 仍为
+   `3c63ec5d06ffc7b97f2f3f965f4bdf7e52b72f38cd98e0b532456e0ef7e3c421`；
+   G2-4F2D 工作点和一次性 holdout 协议已经冻结。只能在记录冻结 commit
+   后解封一次，不能根据结果回调参数或直接进入 G1。
 
 ---
 
@@ -755,10 +772,17 @@ results/g2_4f1_expansion_2026-07-29/G2_4F1_INDEPENDENT_CANDIDATE_EXPANSION_RESUL
   可测 ORB；框内/去人物背景 residual 中位为 `11.919/0.723 px`，成对比值
   中位 `20.045x`，GT-pose 框内中位 `11.582 px`。这是方向性 evidence，
   不是阈值或动态判决；
+- G2-4F2 已完成 FlowFusion/Kalal/Li–Lee/DynaSLAM/SInDSLAM 的来源审计，
+  并在 TUM/Bonn 真静态域完成 `FB/q` 风险曲线；边界主解释被否决，没有加入
+  boundary veto；
+- `FB<=0.25, q>=10` 已冻结为项目级 `[S/H]`
+  `high_residual_candidate` 工作点。它在两个静态域的 MapPoint 候选率均低于
+  0.12%，并保留 6/6 个 development 可测气球帧的框内候选；它仍不是动态
+  标签；
 - 几何尚未进入真正的 SLAM 过滤，因此现在不测“几何 ATE 改善”，只保留语义基线 ATE/FPS 作为冻结对照。
 
-当前下一步仍不是进入 G1。应先阅读本地 PaperNotes/PDF，冻结有文献依据的
-feature quality gate、静态 false-positive 门、development threshold 与
-holdout 验证协议；不能把当前气球 residual 中位数直接变成动态阈值。
+当前下一步仍不是进入 G1。应先提交冻结代码和协议，再一次性运行 sealed
+`balloon_tracking` holdout；无论通过与否都不得回调工作点。通过后也只允许
+进入 G1-F0 mutation shadow。
 
 这份交接的目的不是让新会话“相信摘要”，而是让它知道去哪里核查、哪些结论已经冻结、哪些结果仍是假设，以及下一步只能改动什么。

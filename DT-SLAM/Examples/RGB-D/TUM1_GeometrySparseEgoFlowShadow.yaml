@@ -1,0 +1,65 @@
+%YAML:1.0
+
+# TUM fr1 G2-4F1/F2 static-risk sparse ego-flow instrumentation.
+# RGB and registered depth are jointly remapped to P=K so LK, ORB, depth,
+# mask, and ego-flow projection share one undistorted pinhole domain.
+# Shadow-only: no dynamic decision, fusion, or SLAM mutation.
+
+Camera.fx: 517.306408
+Camera.fy: 516.469215
+Camera.cx: 318.643040
+Camera.cy: 255.313989
+
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.k3: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+
+RGBD.InputRectification.Enable: 1
+RGBD.InputRectification.fx: 517.306408
+RGBD.InputRectification.fy: 516.469215
+RGBD.InputRectification.cx: 318.643040
+RGBD.InputRectification.cy: 255.313989
+RGBD.InputRectification.k1: 0.262383
+RGBD.InputRectification.k2: -0.953104
+RGBD.InputRectification.p1: -0.005358
+RGBD.InputRectification.p2: 0.002628
+RGBD.InputRectification.k3: 1.163314
+
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 1
+Geometry.SingleReferenceShadowEnable: 0
+Geometry.MultiReferenceShadowEnable: 0
+Geometry.SparseEgoFlowShadowEnable: 1
+Geometry.LogEveryN: 30
+Geometry.ResidualThresholdM: 0.10
+Geometry.RegionGrowEnable: 0
+Geometry.DebugSave: 0
+Geometry.RegionEvidenceShadowEnable: 0
+Geometry.RegionRiskDiagnosticsEnable: 0
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

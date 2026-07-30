@@ -1468,6 +1468,10 @@ void Tracking::SaveGeometryPoseDiagnostics()
                 << "lk_error_backward,lk_error_forward,"
                 << "forward_backward_error_px,"
                 << "reference_depth_valid,reference_depth_m,"
+                << "reference_depth_boundary_d1,"
+                << "reference_depth_boundary_d2,"
+                << "reference_invalid_depth_d1,"
+                << "reference_invalid_depth_d2,"
                 << "slam_ego_projection_valid,slam_u_ego,"
                 << "slam_v_ego,slam_residual_x_px,"
                 << "slam_residual_y_px,"
@@ -1547,6 +1551,18 @@ void Tracking::SaveGeometryPoseDiagnostics()
                 if(sample.referenceDepthValid)
                     stream << sample.referenceDepthMeters;
                 stream << ","
+                       << (sample.referenceDepthBoundaryWithinOnePixel
+                           ? 1 : 0)
+                       << ","
+                       << (sample.referenceDepthBoundaryWithinTwoPixels
+                           ? 1 : 0)
+                       << ","
+                       << (sample.referenceInvalidDepthWithinOnePixel
+                           ? 1 : 0)
+                       << ","
+                       << (sample.referenceInvalidDepthWithinTwoPixels
+                           ? 1 : 0)
+                       << ","
                        << (sample.slamProjectionValid ? 1 : 0)
                        << ",";
                 if(sample.slamProjectionValid)
@@ -2319,7 +2335,9 @@ void Tracking::RunSparseEgoFlowShadow()
                     : cv::Mat(),
                 pairedGroundTruth
                     ? mCurrentGroundTruthTcw
-                    : cv::Mat());
+                    : cv::Mat(),
+                mGeometryRegionRelativeThreshold,
+                mGeometryRegionAbsoluteThresholdMeters);
     }
     else
     {

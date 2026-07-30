@@ -1563,7 +1563,9 @@ GeometricDynamicDetector::ComputeSparseEgoFlow(
     const cv::Mat &TcwCurrent,
     const cv::Mat &K,
     const cv::Mat &TcwGroundTruthReference,
-    const cv::Mat &TcwGroundTruthCurrent)
+    const cv::Mat &TcwGroundTruthCurrent,
+    const float depthBoundaryRelativeThreshold,
+    const float depthBoundaryAbsoluteThresholdMeters)
 {
     ValidateGrayImage(currentGray,"current gray image");
     ValidateGrayImage(referenceGray,"reference gray image");
@@ -1583,6 +1585,15 @@ GeometricDynamicDetector::ComputeSparseEgoFlow(
     {
         throw std::invalid_argument(
             "sparse-flow poses and K must contain finite values");
+    }
+    if(!std::isfinite(depthBoundaryRelativeThreshold) ||
+       depthBoundaryRelativeThreshold<0.0f ||
+       !std::isfinite(depthBoundaryAbsoluteThresholdMeters) ||
+       depthBoundaryAbsoluteThresholdMeters<=0.0f)
+    {
+        throw std::invalid_argument(
+            "sparse-flow depth-boundary thresholds must be finite, "
+            "with a non-negative relative and positive absolute value");
     }
 
     const bool hasGroundTruth =
@@ -1722,6 +1733,80 @@ GeometricDynamicDetector::ComputeSparseEgoFlow(
             continue;
         }
         ++result.stats.referenceDepthValidCount;
+
+        for(int offsetV=-2; offsetV<=2; ++offsetV)
+        {
+            for(int offsetU=-2; offsetU<=2; ++offsetU)
+            {
+                const int neighborU = referenceU+offsetU;
+                const int neighborV = referenceV+offsetV;
+                if(neighborU<0 ||
+                   neighborU>=referenceDepthMeters.cols ||
+                   neighborV<0 ||
+                   neighborV>=referenceDepthMeters.rows)
+                {
+                    continue;
+                }
+                const int distance =
+                    std::max(std::abs(offsetU),std::abs(offsetV));
+                const float neighborDepth =
+                    referenceDepthMeters.at<float>(
+                        neighborV,neighborU);
+                if(!IsValidDepth(neighborDepth))
+                {
+                    if(distance<=1)
+                    {
+                        sample.referenceInvalidDepthWithinOnePixel =
+                            true;
+                    }
+                    sample.referenceInvalidDepthWithinTwoPixels =
+                        true;
+                    continue;
+                }
+
+                bool isBoundary = false;
+                static const int du[4] = {-1,1,0,0};
+                static const int dv[4] = {0,0,-1,1};
+                const float discontinuityThreshold =
+                    std::max(
+                        depthBoundaryRelativeThreshold*neighborDepth,
+                        depthBoundaryAbsoluteThresholdMeters);
+                for(int direction=0; direction<4; ++direction)
+                {
+                    const int adjacentU =
+                        neighborU+du[direction];
+                    const int adjacentV =
+                        neighborV+dv[direction];
+                    if(adjacentU<0 ||
+                       adjacentU>=referenceDepthMeters.cols ||
+                       adjacentV<0 ||
+                       adjacentV>=referenceDepthMeters.rows)
+                    {
+                        continue;
+                    }
+                    const float adjacentDepth =
+                        referenceDepthMeters.at<float>(
+                            adjacentV,adjacentU);
+                    if(IsValidDepth(adjacentDepth) &&
+                       std::abs(adjacentDepth-neighborDepth)>
+                           discontinuityThreshold)
+                    {
+                        isBoundary = true;
+                        break;
+                    }
+                }
+                if(isBoundary)
+                {
+                    if(distance<=1)
+                    {
+                        sample.referenceDepthBoundaryWithinOnePixel =
+                            true;
+                    }
+                    sample.referenceDepthBoundaryWithinTwoPixels =
+                        true;
+                }
+            }
+        }
 
         sample.slamProjectionValid =
             ProjectSparseFlowPoint(

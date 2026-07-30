@@ -1132,6 +1132,51 @@ void TestSparseEgoFlowInvalidEvidence()
         "LK failure must not produce a sparse-flow residual");
 }
 
+void TestSparseEgoFlowDepthRiskDiagnostics()
+{
+    const cv::Mat texture = MakeSparseFlowTexture();
+    const std::vector<cv::Point2f> feature(
+        1,cv::Point2f(64.0f,48.0f));
+
+    cv::Mat stepDepth(
+        texture.size(),CV_32FC1,cv::Scalar(2.0f));
+    stepDepth.colRange(66,stepDepth.cols).setTo(4.0f);
+    ORB_SLAM2::GeometricSparseFlowResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                texture,texture,stepDepth,feature,
+                IdentityPose(),IdentityPose(),
+                SparseFlowCameraMatrix());
+    Require(
+        result.samples[0].evidenceState==
+            ORB_SLAM2::GeometricSparseFlowEvidenceState::Measured &&
+        result.samples[0].
+            referenceDepthBoundaryWithinOnePixel &&
+        result.samples[0].
+            referenceDepthBoundaryWithinTwoPixels,
+        "depth step must be recorded as nearby boundary risk");
+
+    cv::Mat invalidNeighborDepth(
+        texture.size(),CV_32FC1,cv::Scalar(2.0f));
+    invalidNeighborDepth.at<float>(48,66) = 0.0f;
+    result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeSparseEgoFlow(
+                texture,texture,invalidNeighborDepth,feature,
+                IdentityPose(),IdentityPose(),
+                SparseFlowCameraMatrix());
+    Require(
+        !result.samples[0].
+            referenceInvalidDepthWithinOnePixel &&
+        result.samples[0].
+            referenceInvalidDepthWithinTwoPixels,
+        "invalid-depth risk bands must preserve one/two-pixel distance");
+    Require(
+        !result.samples[0].
+            referenceDepthBoundaryWithinTwoPixels,
+        "invalid depth must not be reinterpreted as a depth boundary");
+}
+
 } // namespace
 
 int main()
@@ -1165,15 +1210,16 @@ int main()
         TestSparseEgoFlowIdentityAndLkDirection();
         TestSparseEgoFlowCameraAndIndependentMotion();
         TestSparseEgoFlowInvalidEvidence();
+        TestSparseEgoFlowDepthRiskDiagnostics();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1 Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1 Test] PASS"
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B Test] PASS"
               << std::endl;
     return 0;
 }

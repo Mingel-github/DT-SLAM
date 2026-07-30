@@ -24,6 +24,11 @@ SEQUENCE_EXPORTS = {
     "balloon2": "balloon2_f1d_exact_semantic_export",
 }
 
+G2_F2_FB_THRESHOLDS = (0.25, 0.5, 1.0, 2.0)
+G2_F2_NORMALIZED_THRESHOLDS = (2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+G2_F2_SCALE_FLOOR_PX = 1.0e-3
+G2_F2_MINIMUM_SCALE_SUPPORT = 20
+
 
 def parse_named_path(value):
     if "=" not in value:
@@ -367,6 +372,12 @@ def audit_sequence(
             row = dict(row)
             row["_inside_bbox"] = bbox_contains(metadata, u, v)
             row["_inside_person_mask"] = person_mask[iv, iu] != 0
+            row["_sequence"] = sequence
+            row["_motion_label"] = motion["motion_label"]
+            row["_visibility"] = metadata["visibility"]
+            row["_target_semantic_exact_zero_overlap"] = (
+                int(metadata["person_mask_pixels_inside_bbox"]) == 0
+            )
             if online_semantic and (
                 (row["semantic_nonzero"] == "1")
                 != row["_inside_person_mask"]
@@ -507,6 +518,186 @@ def aggregate_strata(frame_results, annotated_rows):
     return result
 
 
+def feature_gate_quality_eligible(row, fb_threshold):
+    if row["evidence_state"] != "measured":
+        return False
+    if row["semantic_nonzero"] != "0":
+        return False
+    fb_error = finite_float(row["forward_backward_error_px"])
+    residual = finite_float(row["slam_residual_magnitude_px"])
+    return (
+        fb_error is not None
+        and residual is not None
+        and fb_error <= fb_threshold
+    )
+
+
+def feature_gate_development_curves(annotated_rows):
+    """Evaluate frozen F2Q curves on RGB-only balloon proxy strata.
+
+    This is not threshold selection. Per-frame robust scale uses all
+    nonsemantic, FB-quality-eligible measured features. The moving-object
+    subset is selected without reading flow values.
+    """
+
+    rows_by_frame = {}
+    for _, row in annotated_rows:
+        key = (row["_sequence"], int(row["frame"]))
+        rows_by_frame.setdefault(key, []).append(row)
+
+    working_points = []
+    for fb_threshold in G2_F2_FB_THRESHOLDS:
+        scales = {}
+        for key, rows in rows_by_frame.items():
+            eligible = [
+                row
+                for row in rows
+                if feature_gate_quality_eligible(row, fb_threshold)
+            ]
+            if len(eligible) < G2_F2_MINIMUM_SCALE_SUPPORT:
+                scales[key] = None
+                continue
+            scales[key] = max(
+                G2_F2_SCALE_FLOOR_PX,
+                1.4826
+                * statistics.median(
+                    finite_float(row["slam_residual_magnitude_px"])
+                    for row in eligible
+                ),
+            )
+
+        for normalized_threshold in G2_F2_NORMALIZED_THRESHOLDS:
+            per_frame = []
+            for key, rows in rows_by_frame.items():
+                scale = scales[key]
+                if scale is None:
+                    continue
+                moving_exact_zero = (
+                    rows[0]["_motion_label"] == "moving_observable"
+                    and rows[0]["_visibility"]
+                    in ("visible", "partial", "occluded")
+                    and rows[0]["_target_semantic_exact_zero_overlap"]
+                )
+                if not moving_exact_zero:
+                    continue
+
+                inside = []
+                outside = []
+                for row in rows:
+                    if not feature_gate_quality_eligible(
+                        row, fb_threshold
+                    ):
+                        continue
+                    normalized = (
+                        finite_float(
+                            row["slam_residual_magnitude_px"]
+                        )
+                        / scale
+                    )
+                    candidate = normalized >= normalized_threshold
+                    if (
+                        row["_inside_bbox"]
+                        and not row["_inside_person_mask"]
+                    ):
+                        inside.append(candidate)
+                    elif (
+                        not row["_inside_bbox"]
+                        and not row["_inside_person_mask"]
+                    ):
+                        outside.append(candidate)
+
+                inside_rate = (
+                    sum(inside) / len(inside) if inside else None
+                )
+                outside_rate = (
+                    sum(outside) / len(outside) if outside else None
+                )
+                per_frame.append(
+                    {
+                        "sequence": key[0],
+                        "frame": key[1],
+                        "frame_scale_px": scale,
+                        "inside_eligible": len(inside),
+                        "inside_candidates": sum(inside),
+                        "inside_candidate_rate": inside_rate,
+                        "outside_eligible": len(outside),
+                        "outside_candidates": sum(outside),
+                        "outside_candidate_rate": outside_rate,
+                        "inside_minus_outside_candidate_rate": (
+                            inside_rate - outside_rate
+                            if inside_rate is not None
+                            and outside_rate is not None
+                            else None
+                        ),
+                        "inside_over_outside_candidate_rate": (
+                            inside_rate / outside_rate
+                            if inside_rate is not None
+                            and outside_rate not in (None, 0.0)
+                            else None
+                        ),
+                    }
+                )
+
+            working_points.append(
+                {
+                    "fb_threshold_px": fb_threshold,
+                    "normalized_residual_threshold":
+                        normalized_threshold,
+                    "moving_exact_zero_frames": len(per_frame),
+                    "moving_exact_zero_frames_with_inside_evidence": sum(
+                        frame["inside_eligible"] > 0
+                        for frame in per_frame
+                    ),
+                    "moving_exact_zero_frames_with_inside_candidates": sum(
+                        frame["inside_candidates"] > 0
+                        for frame in per_frame
+                    ),
+                    "frame_balanced_inside_candidate_rate": distribution(
+                        frame["inside_candidate_rate"]
+                        for frame in per_frame
+                    ),
+                    "frame_balanced_outside_candidate_rate": distribution(
+                        frame["outside_candidate_rate"]
+                        for frame in per_frame
+                    ),
+                    "frame_balanced_inside_minus_outside_candidate_rate":
+                        distribution(
+                            frame[
+                                "inside_minus_outside_candidate_rate"
+                            ]
+                            for frame in per_frame
+                        ),
+                    "frame_balanced_inside_over_outside_candidate_rate":
+                        distribution(
+                            frame[
+                                "inside_over_outside_candidate_rate"
+                            ]
+                            for frame in per_frame
+                        ),
+                    "per_frame": per_frame,
+                }
+            )
+
+    return {
+        "identity": (
+            "G2-4F2Q normalized residual development sensitivity curves"
+        ),
+        "method_identity": (
+            "[A/S/H] FlowFusion residual + Kalal FB quality + "
+            "Li-Lee-inspired zero-centered robust scale"
+        ),
+        "motion_proxy_is_ground_truth": False,
+        "dynamic_decision": "none",
+        "operating_point_selected": False,
+        "scale_definition": (
+            "max(0.001 px, 1.4826 * median(nonsemantic "
+            "FB-quality-eligible residual))"
+        ),
+        "minimum_scale_support": G2_F2_MINIMUM_SCALE_SUPPORT,
+        "working_points": working_points,
+    }
+
+
 def flatten_frame_result(frame):
     result = {
         "sequence": frame["sequence"],
@@ -585,6 +776,39 @@ def self_test():
     assert summary["measured_coverage"] == 0.5
     assert summary["slam_residual_px"]["median"] == 2.0
     assert rank_auc([2.0, 3.0], [1.0, 2.0]) == 0.875
+    gate_rows = []
+    for index in range(25):
+        gate_rows.append(
+            (
+                "moving_observable_person_absent",
+                {
+                    "frame": "1",
+                    "evidence_state": "measured",
+                    "semantic_nonzero": "0",
+                    "forward_backward_error_px": "0.1",
+                    "slam_residual_magnitude_px": (
+                        "10.0" if index < 3 else "0.1"
+                    ),
+                    "_sequence": "balloon",
+                    "_motion_label": "moving_observable",
+                    "_visibility": "visible",
+                    "_target_semantic_exact_zero_overlap": True,
+                    "_inside_bbox": index < 3,
+                    "_inside_person_mask": False,
+                },
+            )
+        )
+    gate_summary = feature_gate_development_curves(gate_rows)
+    first_working_point = gate_summary["working_points"][0]
+    assert first_working_point["moving_exact_zero_frames"] == 1
+    assert (
+        first_working_point[
+            "moving_exact_zero_frames_with_inside_candidates"
+        ]
+        == 1
+    )
+    assert gate_summary["dynamic_decision"] == "none"
+    assert gate_summary["operating_point_selected"] is False
     print("[G2-4F1 Sparse Flow Audit Self-Test] PASS")
 
 
@@ -608,6 +832,14 @@ def main():
     )
     parser.add_argument("--output-dir", type=pathlib.Path)
     parser.add_argument("--online-semantic", action="store_true")
+    parser.add_argument(
+        "--feature-gate-curves",
+        action="store_true",
+        help=(
+            "append frozen G2-4F2Q development curves; this does not "
+            "select an operating point"
+        ),
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -755,6 +987,10 @@ def main():
             },
         },
     }
+    if args.feature_gate_curves:
+        summary["g2_4f2_feature_gate_curves"] = (
+            feature_gate_development_curves(all_annotated_rows)
+        )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = args.output_dir / "summary.json"

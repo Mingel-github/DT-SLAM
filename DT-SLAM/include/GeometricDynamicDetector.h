@@ -207,6 +207,10 @@ struct GeometricSparseFlowSample
     cv::Point2f groundTruthEgoPixel;
     cv::Point2f groundTruthResidualPixels;
     float groundTruthResidualMagnitudePixels = 0.0f;
+    bool referenceDepthBoundaryWithinOnePixel = false;
+    bool referenceDepthBoundaryWithinTwoPixels = false;
+    bool referenceInvalidDepthWithinOnePixel = false;
+    bool referenceInvalidDepthWithinTwoPixels = false;
     bool backwardLkValid = false;
     bool forwardLkValid = false;
     bool referenceDepthValid = false;
@@ -445,7 +449,9 @@ public:
         const cv::Mat &TcwCurrent,
         const cv::Mat &K,
         const cv::Mat &TcwGroundTruthReference = cv::Mat(),
-        const cv::Mat &TcwGroundTruthCurrent = cv::Mat());
+        const cv::Mat &TcwGroundTruthCurrent = cv::Mat(),
+        const float depthBoundaryRelativeThreshold = 0.025f,
+        const float depthBoundaryAbsoluteThresholdMeters = 0.08f);
 
     static const char *SparseFlowEvidenceStateName(
         const GeometricSparseFlowEvidenceState state);
