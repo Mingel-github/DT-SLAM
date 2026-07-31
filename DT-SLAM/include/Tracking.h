@@ -185,6 +185,12 @@ protected:
     void RunGeometryShadow();
     void RunMultiReferenceGeometryShadow();
     void RunSparseEgoFlowShadow();
+    int ApplySparseFlowTrackingFilter();
+    void RecordSparseFlowAssociationSnapshot(
+        const std::string &stage,
+        const int trackingInliers = -1,
+        const std::vector<unsigned char> &countedTrackingInliers =
+            std::vector<unsigned char>());
     void UpdateSparseEgoFlowReference();
     void UpdateMultiReferenceGeometryHistory(
         const cv::Mat &referenceDepth);
@@ -326,12 +332,165 @@ protected:
     std::vector<GeometryMultiReferenceFeatureRecord>
         mvGeometryMultiReferenceFeatureDiagnostics;
 
-    // G2-4F1 adjacent-successful-frame sparse ego-flow residual.
-    // Shadow-only: no threshold, class, feature removal, or map mutation.
+    // G2-4F1 adjacent-successful-frame sparse ego-flow residual. The raw
+    // measurement remains diagnostic; default-off G1-F1 may consume it
+    // through the separate association-filter state below.
     bool mbGeometrySparseEgoFlowShadowEnabled;
     std::string mGeometrySparseFlowCsvPath;
     std::set<long unsigned int> mGeometrySparseFlowFrameFilter;
     long unsigned int mnGeometrySparseFlowComputedFrames;
+
+    // G1-F0B raw association snapshots. Counterfactual-only: the online
+    // path records existing state and never scores or removes observations.
+    bool mbGeometrySparseFlowCounterfactualShadowEnabled;
+    std::string mGeometryAssociationSnapshotCsvPath;
+
+    // G1-F1 default-off removal of high-residual MapPoint associations before
+    // the existing TrackLocalMap pose optimization. It does not write
+    // Frame::mvbDynamic and does not veto mapping.
+    bool mbGeometrySparseFlowTrackingFilterEnabled;
+    float mfGeometrySparseFlowTrackingFilterQ;
+    float mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction;
+    int mnGeometrySparseFlowTrackingFilterMinimumAssociations;
+    std::size_t mnGeometrySparseFlowTrackingFilterMinimumScaleSupport;
+    std::string mGeometrySparseFlowTrackingFilterCsvPath;
+    GeometricSparseFlowFilterResult mCurrentSparseFlowFilterResult;
+    std::vector<unsigned char>
+        mvbCurrentSparseFlowRemovedAssociations;
+    bool mbCurrentSparseFlowTrackingSafeguardsPassed;
+    std::string mCurrentSparseFlowTrackingSafeguardState;
+
+    struct GeometrySparseFlowTrackingFilterRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        float qThreshold;
+        bool scaleValid;
+        float frameScalePixels;
+        std::size_t scaleSupport;
+        std::size_t qualityEligibleFeatures;
+        std::size_t candidateFeatures;
+        int baselineAssociations;
+        int candidateAssociations;
+        int removedAssociations;
+        int remainingAssociations;
+        double candidateAssociationFraction;
+        bool withinRelocalizationWindow;
+        bool applied;
+        std::string state;
+    };
+    std::vector<GeometrySparseFlowTrackingFilterRecord>
+        mvGeometrySparseFlowTrackingFilterDiagnostics;
+
+    // G1-M0 default-off, read-only audit of q10 candidate admission into
+    // RGB-D initialization and Tracking-side KeyFrame MapPoint creation.
+    bool mbGeometrySparseFlowMappingCounterfactualEnabled;
+    std::string mGeometrySparseFlowMappingCounterfactualCsvPath;
+    struct GeometrySparseFlowMappingAdmissionRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::string stage;
+        float qThreshold;
+        bool scaleValid;
+        bool candidateVectorValid;
+        std::string candidateState;
+        std::size_t featureCount;
+        std::size_t candidateFeatures;
+        std::size_t candidateAssociationsBeforeMapping;
+        std::size_t candidateTrackingRemovals;
+        std::size_t validDepthFeatures;
+        std::size_t candidateValidDepthFeatures;
+        std::size_t depthAdmissionFeatures;
+        std::size_t candidateDepthAdmissionFeatures;
+        std::size_t createdMapPoints;
+        std::size_t candidateCreatedMapPoints;
+        std::size_t recreatedAfterTrackingRemoval;
+    };
+    std::vector<GeometrySparseFlowMappingAdmissionRecord>
+        mvGeometrySparseFlowMappingAdmissionDiagnostics;
+
+    // G1-M1 default-off MapPoint admission protection. Once the existing
+    // G1-F1 safeguards and the mapping-specific fail-open limits pass, q10
+    // candidates are fused into Frame::mvbDynamic before KeyFrame creation.
+    bool mbGeometrySparseFlowMappingFilterEnabled;
+    float mfGeometrySparseFlowMappingFilterMaximumFeatureFraction;
+    float mfGeometrySparseFlowMappingFilterMaximumDepthFraction;
+    std::size_t
+        mnGeometrySparseFlowMappingFilterMinimumRemainingDepthFeatures;
+    std::string mGeometrySparseFlowMappingFilterCsvPath;
+    struct GeometrySparseFlowMappingFilterRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::string stage;
+        float qThreshold;
+        bool scaleValid;
+        bool candidateVectorValid;
+        bool trackingSafeguardsPassed;
+        std::string trackingSafeguardState;
+        std::size_t featureCount;
+        std::size_t availableFeatures;
+        std::size_t candidateFeatures;
+        double candidateFeatureFraction;
+        std::size_t validDepthFeatures;
+        std::size_t candidateValidDepthFeatures;
+        double candidateDepthFraction;
+        float maximumFeatureFraction;
+        float maximumDepthFraction;
+        std::size_t minimumRemainingDepthFeatures;
+        std::size_t remainingValidDepthFeatures;
+        std::size_t candidateAssociationsBeforeVeto;
+        std::size_t candidateTrackingRemovals;
+        std::size_t newDynamicFlags;
+        std::size_t removedAssociations;
+        std::size_t vetoedDepthFeatures;
+        std::size_t createdMapPoints;
+        std::size_t candidateCreatedMapPoints;
+        bool applied;
+        std::string state;
+    };
+    std::vector<GeometrySparseFlowMappingFilterRecord>
+        mvGeometrySparseFlowMappingFilterDiagnostics;
+
+    // Read-only final-map quality audit for q10 candidate MapPoints created
+    // by either the G1-M0 baseline or the G1-M1 fail-open path.
+    bool mbGeometrySparseFlowMapQualityAuditEnabled;
+    std::string mGeometrySparseFlowMapQualityPrefix;
+    struct GeometrySparseFlowCandidateMapPointRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::size_t featureIndex;
+        float pixelX;
+        float pixelY;
+        float depthMeters;
+        std::string mode;
+        std::string mappingState;
+        long unsigned int originalMapPointId;
+        MapPoint *originalMapPoint;
+    };
+    std::vector<GeometrySparseFlowCandidateMapPointRecord>
+        mvGeometrySparseFlowCandidateMapPoints;
+
+    struct GeometryAssociationSnapshotRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::string stage;
+        std::size_t featureIndex;
+        bool hasMapPoint;
+        bool mapPointBad;
+        int mapPointObservations;
+        bool currentFrameOutlier;
+        bool semanticNonzero;
+        bool onlyTracking;
+        bool withinRelocalizationWindow;
+        bool countedTrackingInlier;
+        int trackingInliers;
+    };
+    std::vector<GeometryAssociationSnapshotRecord>
+        mvGeometryAssociationSnapshotDiagnostics;
 
     // G2-4F3 adjacent-frame local 3-D edge-length consistency.
     // Shadow-only: no rigidity threshold, motion class, or SLAM mutation.

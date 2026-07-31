@@ -1177,6 +1177,53 @@ void TestSparseEgoFlowDepthRiskDiagnostics()
         "invalid depth must not be reinterpreted as a depth boundary");
 }
 
+void TestSparseFlowHighResidualCandidateSelection()
+{
+    ORB_SLAM2::GeometricSparseFlowResult sparseFlow;
+    sparseFlow.samples.resize(21);
+    std::vector<unsigned char> semanticDynamic(21,0);
+    for(std::size_t index=0;
+        index<sparseFlow.samples.size(); ++index)
+    {
+        ORB_SLAM2::GeometricSparseFlowSample &sample =
+            sparseFlow.samples[index];
+        sample.featureIndex = index;
+        sample.evidenceState =
+            ORB_SLAM2::GeometricSparseFlowEvidenceState::Measured;
+        sample.forwardBackwardErrorPixels = 0.1f;
+        sample.slamResidualMagnitudePixels = 1.0f;
+    }
+    sparseFlow.samples[19].slamResidualMagnitudePixels = 20.0f;
+    sparseFlow.samples[20].slamResidualMagnitudePixels = 20.0f;
+    semanticDynamic[20] = 1;
+
+    const ORB_SLAM2::GeometricSparseFlowFilterResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            SelectSparseFlowHighResidualCandidates(
+                sparseFlow,semanticDynamic,10.0f);
+    Require(result.scaleValid && result.scaleSupport==21,
+            "sparse-flow candidate scale must use all quality samples");
+    Require(
+        std::abs(result.frameScalePixels-1.4826f)<1e-5f,
+        "sparse-flow candidate frame scale differs from frozen definition");
+    Require(result.qualityEligibleFeatureCount==21 &&
+            result.candidateFeatureCount==1,
+            "semantic feature must support scale but not become a candidate");
+    Require(result.candidateMask[19]==1 &&
+            result.candidateMask[20]==0,
+            "sparse-flow q candidate or semantic exclusion is incorrect");
+
+    sparseFlow.samples[0].forwardBackwardErrorPixels = 0.3f;
+    const ORB_SLAM2::GeometricSparseFlowFilterResult insufficient =
+        ORB_SLAM2::GeometricDynamicDetector::
+            SelectSparseFlowHighResidualCandidates(
+                sparseFlow,semanticDynamic,10.0f,0.25f,21);
+    Require(!insufficient.scaleValid &&
+            insufficient.scaleSupport==20 &&
+            insufficient.candidateFeatureCount==0,
+            "insufficient scale support must fail open");
+}
+
 ORB_SLAM2::GeometricSparseFlowResult MakeRigiditySparseFlow(
     const std::vector<cv::Point2f> &referencePixels,
     const std::vector<cv::Point2f> &currentPixels,
@@ -1414,6 +1461,7 @@ int main()
         TestSparseEgoFlowCameraAndIndependentMotion();
         TestSparseEgoFlowInvalidEvidence();
         TestSparseEgoFlowDepthRiskDiagnostics();
+        TestSparseFlowHighResidualCandidateSelection();
         TestLocalRigidityRigidTranslation();
         TestLocalRigidityIndependentNode();
         TestLocalRigidityInvalidAndDuplicateNodes();
@@ -1422,12 +1470,12 @@ int main()
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U/G1-F1 Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U Test] PASS"
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U/G1-F1 Test] PASS"
               << std::endl;
     return 0;
 }

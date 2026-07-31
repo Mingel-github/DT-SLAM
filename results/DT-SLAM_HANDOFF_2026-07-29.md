@@ -1,6 +1,6 @@
 # DT-SLAM 项目交接说明
 
-更新时间：2026-07-29
+更新时间：2026-07-31
 工作区：`/home/zhu/dynaslam_ws`
 源代码：`/home/zhu/dynaslam_ws/DT-SLAM`
 
@@ -35,7 +35,10 @@ ORB-SLAM2 RGB-D
 - 不增加无条件的第三次 `PoseOptimization()`；
 - 不实现 TSDF、OctoMap、3DGS 或完整动态地图；
 - 不重构 ORB-SLAM2 后端线程；
-- 不把几何 shadow 结果提前写入 `mvbDynamic`、`mvpMapPoints` 或地图。
+- shadow 模式不写 SLAM 状态；默认关闭的 G1-F1 可实验性清除
+  `TrackLocalMap()` 的少量 `mvpMapPoints` 关联；默认关闭的 G1-M1 可在通过
+  额外安全条件后阻止同一 q10 候选写入稀疏 MapPoint。二者均不修改优化器或
+  后端目标。
 
 本地工作区是权威版本，GitHub 仅作为备份。不能因远端分支缺少未提交实验就覆盖本地状态。
 
@@ -52,13 +55,12 @@ main
 当前已推送提交：
 
 ```text
-1a4bd8a Add geometry separability and Bonn coordinate audits
+e2d6559 Evaluate motion grouping shadow routes
 ```
 
-检查时 `HEAD` 与 `origin/main` 均为 `1a4bd8a`。G2-4C 选帧工具、时间戳/
-hold-out 修正、G2-4D C++ person 导出/box coverage、G2-4E 连续 evidence
-审计、G2-4F0 direct feature evidence、阶段文档及其原始结果仍在本地，尚未
-提交或推送。
+当前 G1-F1/G1-M0/G1-M1 实现与正式结果、G2-6E/G2-6O 审计和部分较早工具
+仍是本地未提交工作。提交前必须以 `git status` 重新生成精确文件清单；下方
+旧阶段的未提交清单仅是历史记录，不再视为当前完整状态。
 
 当前主要未提交文件：
 
@@ -1141,3 +1143,629 @@ G1-F / G1-D                       locked
 results/g2_4r1_2026-07-30/
   G2_4R1_NORMAL_DISTANCE_SEGMENTATION_SHADOW_RESULT.md
 ```
+
+## 18. 2026-07-30 G2-4R2 图拓扑可行性审计完成状态
+
+本阶段先纠正了上一轮路线理由：目标代理内 MapPoint 少并不能从理论上直接否定
+Dai 图，因为少量动态节点仍可能通过删除 crossing edges 从全局静态图分离。
+因此没有凭数量停止，而是补做了缺失的 connected-component 拓扑实验。
+
+新增离线只读工具：
+
+```text
+DT-SLAM/tools/audit_static_calibrated_graph_partition.py
+```
+
+对 all-transient 与 MapPoint-only 两条图分别用 Bonn 真静态前 71 个可测帧
+标定 q90–q99.5 strain 工作点，后 71 帧验证静态风险，再评价冻结的
+balloon/balloon2 bbox proxy。没有读取 sealed `balloon_tracking`。
+
+核心结果：
+
+```text
+all-transient q90:
+  static outside-primary P95     2.82%
+  dynamic supported             14/17
+  bbox recall median             9.69%
+  recall >=50%                   0/14
+  enrichment median              2.59
+  gate                           FAILED
+
+MapPoint-only:
+  bbox >=3 nodes                 1/17
+  gate                           FAILED
+```
+
+C++/Python edge-set parity 在 static/balloon/balloon2 均通过，确定性重放通过。
+因此按预注册条件停止“scalar absolute strain + 静态分位阈值 + CC”的简化图
+路线，不在已打开开发集上继续调阈值。
+
+这不是 Dai 完整 point-correlation 的失败复现；当前没有实现其 edge-state
+optimization、全协方差 Mahalanobis 迭代、largest-volume 或后端滑窗。
+
+当前状态：
+
+```text
+dynamic_decision                 none
+direct_slam_state_mutation       none
+G1-F / G1-D                      locked
+下一步                           先做总路线书面决策
+```
+
+详细记录：
+
+```text
+results/g2_4r2_2026-07-30/
+  G2_4R2_DAI_GRAPH_PARTITION_FEASIBILITY_DECISION.md
+  G2_4R2_STATIC_CALIBRATED_GRAPH_PARTITION_SHADOW_SPEC.md
+  G2_4R2_STATIC_CALIBRATED_GRAPH_PARTITION_SHADOW_RESULT.md
+```
+
+### 18.1 下一路线已冻结
+
+R2 后不转入完整 Dai 或重型区域系统，也不继续给 F3 加阈值。下一阶段先写：
+
+```text
+G2-5A semantic-reference、semantic-blind sparse F1 separability SPEC
+```
+
+几何残差对全部可测 ORB feature 独立计算；同步 person mask 只在离线评价时
+标记 feature 所在区域，不进入几何 score。目标是用自动 reference proxy 代替
+用户逐像素标注，并检验 person 开发证据能否迁移到 unknown balloon/box。
+
+该阶段通过后仍先做 G1-F0 counterfactual，不直接删除 feature。详细决策：
+
+```text
+results/g2_4r2_2026-07-30/G2_4_POST_R2_NEXT_ROUTE_DECISION.md
+```
+
+## 19. 2026-07-30 G2-5A 自动语义参考审计完成状态
+
+代码核查确认 F1 已对全部 ORB feature 计算 residual，semantic 只作为 CSV
+事后标签，因此本阶段没有修改 C++。
+
+新增离线工具：
+
+```text
+DT-SLAM/tools/audit_semantic_reference_sparse_flow.py
+```
+
+在线 CUDA 同步语义各运行 149 帧：
+
+```text
+walking: mask 149/149, age 0/0, actual 27.99 FPS
+sitting: mask 149/149, age 0/0, actual 27.96 FPS
+```
+
+核心结果：
+
+```text
+walking comparable frames                 113
+person-region median > background         95.58%
+per-frame AUC median                      0.857
+
+sitting comparable frames                 144
+person-region median > background         79.17%
+per-frame AUC median                      0.659
+```
+
+walking 通过预注册连续证据条件；结合冻结 balloon development 的 `15/15`
+方向性结果，允许进入 G1-F0 counterfactual 设计。随后修正了一项尺度身份：
+raw residual 始终 semantic-blind；初版 q scale 排除了 semantic feature，
+属于 combined pipeline。权威 v2 同时报告用全部合格 feature 得到的
+`q_blind` 和排除 semantic feature 的 `q_combined`。该修正不改变 raw
+direction/AUC，也不推翻旧 F2 q10 hard gate 的 holdout 失败；当前仍没有部署
+阈值。
+
+当前状态：
+
+```text
+G2-5A continuous evidence       PASS
+G1-F0 counterfactual            allowed next
+G1-F / G1-D                     locked
+dynamic decision / mutation     none / none
+```
+
+详细记录：
+
+```text
+results/g2_5a_2026-07-30/
+  G2_5A_SEMANTIC_REFERENCE_SPARSE_FLOW_SHADOW_SPEC.md
+  G2_5A_SEMANTIC_REFERENCE_SPARSE_FLOW_SHADOW_RESULT.md
+```
+
+## 20. 2026-07-30 G1-F0A 初始关联反事实完成状态
+
+G1-F0A 已用 `q=6/8/10` 在六组输入上完成离线假设删除计数。两种尺度均并列
+运行：
+
+```text
+semantic_blind_all_eligible
+combined_semantic_excluded
+```
+
+候选始终排除 semantic feature。两种尺度、三个 q 均未出现任何
+`baseline>=10 → remaining<10`，也没有跨越 10/15/20/30/50 任一支持线。
+两个真静态域的 q6 MapPoint candidate rate 分别为：
+
+```text
+fr1/xyz       0.0721%
+Bonn static   0.1831%
+```
+
+均低于预冻结的 0.20% 工程预算。确定性重放字节一致。
+
+但 unknown development 的作用量很小：
+
+```text
+balloon  q6/q8/q10 = 2/0/0 MapPoints
+balloon2 q6/q8/q10 = 3/2/1 MapPoints
+```
+
+因此 F0A 只通过“初始关联支持可行性”，没有证明 ATE/RPE 会改善，也没有选择
+q。下一步允许设计 G1-F0B，在 `SearchLocalPoints()` 后增加默认关闭的
+counterfactual instrumentation；真实过滤继续锁定。
+
+```text
+dynamic_decision            none
+direct_slam_state_mutation  none
+pose_reoptimization         none
+G1-F / G1-D                 locked
+```
+
+详细记录：
+
+```text
+results/g1_f0_2026-07-30/
+  G1_F0A_INITIAL_ASSOCIATION_COUNTERFACTUAL_SPEC.md
+  G1_F0A_INITIAL_ASSOCIATION_COUNTERFACTUAL_RESULT.md
+  audit_v2_scale_identity_correction/
+```
+
+## 21. 2026-07-30 G1-F0B 局部搜索后反事实完成并停止
+
+新增默认关闭的原始关联快照：
+
+```text
+SearchLocalPoints
+→ existing semantic association removal
+→ post-search snapshot
+→ existing PoseOptimization
+→ exact mnMatchesInliers membership snapshot
+```
+
+在线 C++ 不计算 q、不删除 MapPoint、不增加优化。离线按同次运行的
+`(frame,feature_index)` 与 F1 CSV 精确连接。
+
+首版用导出时重新读取的 MapPoint 状态重建 post-pose inlier，在 fr1 frame 112
+出现 `445 vs Tracking 448`。没有放宽 invariant；v2 在原计数循环同步记录
+`counted_tracking_inlier`，六序列均与 `mnMatchesInliers` 精确一致。
+
+权威 semantic-blind post-pose 结果：
+
+```text
+Bonn true static q6/q8/q10     0.3699% / 0.2680% / 0.2237%
+预冻结 static budget           <=0.20%
+balloon candidate MapPoints    0 / 0 / 0
+balloon2 candidate MapPoints   6 / 2 / 2
+30/50 support-line crossings   0
+```
+
+因此 q6/q8/q10 全部因 Bonn 静态预算失败。没有提高 q、放宽预算或打开 holdout。
+
+```text
+G1-F0B                         FAIL
+dynamic decision / mutation    none / none
+G1-F / G1-D                    locked
+下一步                         总路线书面决策
+```
+
+详细记录：
+
+```text
+results/g1_f0_2026-07-30/
+  G1_F0B_POST_LOCAL_SEARCH_COUNTERFACTUAL_SPEC.md
+  G1_F0B_POST_LOCAL_SEARCH_COUNTERFACTUAL_RESULT.md
+  f0b_runs_v2/
+  f0b_audit_v2_exact_inlier/
+```
+
+路线决策已冻结：不再调单 feature hard threshold。优先研究 evaluation-only
+`G2-6E`：若能取得 Bonn 官方 static environment model，则用官方 pose 投影
+静态模型、与当前 depth 比较并排除 person mask，自动生成 unknown-foreground
+review proxy。当前本地尚未找到该模型文件；实施前需先补齐官方数据并冻结坐标
+链 SPEC。
+
+```text
+results/g1_f0_2026-07-30/
+  G1_F0_POST_COUNTERFACTUAL_ROUTE_DECISION.md
+```
+
+## 22. 2026-07-31 G2-6E Bonn 静态模型评价路线停止于 E1
+
+已从 Bonn 官方站点取得：
+
+```text
+1 mm subsampled static point cloud ZIP  676,032,657 bytes
+ASCII PLY                               54,676,774 points
+official coordinate script
+ReFusion IROS 2019 PDF
+```
+
+新增 evaluation-only 工具：
+
+```text
+DT-SLAM/tools/prepare_bonn_static_model.py
+DT-SLAM/tools/audit_bonn_static_model_alignment.py
+```
+
+工具流式读取 ZIP，不完整解压 2.32 GB PLY；生成 stride16/stride8 的确定性
+`float32 NPY`。静态审计使用：
+
+```text
+camera_from_model =
+inverse(T_ROS * interpolated_T_i * T_ROS * T_m)
+```
+
+保留官方 `T_m` 的约 1.0593 uniform scale，depth timestamp 上执行 translation
+linear interpolation 与 quaternion SLERP，并投影到 G2-4B 已验证的 rectified
+`P=K` 域。
+
+首次运行发现 `cv::erode(INF)` 产生 `FLT_MAX`、被 `isfinite` 误收的问题；
+失败结果保留，修正后自测试和重跑通过。
+
+同一真静态序列的 stride/splat 对照显示：
+
+```text
+stride16/splat0 non-risk r>0.1m  56.23%
+stride16/splat1 non-risk r>0.1m  42.60%
+stride16/splat2 non-risk r>0.1m  37.75%
+stride8/splat1  non-risk r>0.1m  40.53%
+```
+
+点云加密/splat 可改善覆盖，但不能消除随视角变化的大面积单符号残差。部分大量
+有效深度的静态帧 non-risk median 达 `0.10–0.44 m`，`r>0.1 m` 达
+`50%–94%`。这违反预冻结的 E1 静态对齐条件。
+
+因此没有运行 moving-box E2，也没有连接 F1 E3。不得使用 moving 数据调坐标链、
+per-frame offset 或阈值；不得把该 proxy 写成 object-motion GT。
+
+```text
+G2-6E1                         FAIL
+G2-6E2 / E3                   NOT RUN
+dynamic decision / mutation   none / none
+G1-F / G1-D                   locked
+```
+
+详细记录：
+
+```text
+results/g2_6e_2026-07-31/
+  G2_6E_BONN_STATIC_MODEL_UNKNOWN_FOREGROUND_EVALUATION_SPEC.md
+  G2_6E_BONN_STATIC_MODEL_ALIGNMENT_RESULT.md
+```
+
+## 23. 2026-07-31 G2-6O 新增 Bonn 箱子序列审计完成
+
+新增三条官方 Bonn development archive 的 ZIP 直读 association 和 RGB-only
+时序审计。每序列固定选择 `8 uniform + 6 RGB-change-high +
+4 RGB-change-low`，共 54 个候选；选帧不读取 geometry、flow、depth residual
+或 SLAM 输出。
+
+第一版联系表只有约 0.4 秒，无法可靠判断 `kidnapping_box`。第二版没有重选
+候选，而是 exact reuse 相同 frame/role/proxy，扩到约 2 秒显示跨度。
+
+Agent 粗审：
+
+```text
+placing 明确 moving/transition     4，全部 person present
+removing 明确 moving/transition    6，全部 person present
+kidnapping uncertain              12/18，均 person absent
+三序列 moving+person-absent >=medium 0
+```
+
+所有标签是 `agent_rgb_temporal_review_v1` development proxy，不是 motion
+GT。archive 名称没有当作逐帧标签。没有访问 sealed `balloon_tracking`。
+
+冻结状态：
+
+```text
+G2-6O independent unknown-box qualification  FAIL
+G2-6F                                        NOT RUN
+G1-F / G1-D                                  LOCKED
+SLAM mutation                                NONE
+```
+
+下一步不能继续按 box 名称下载并假定能解决评价缺口。若用户有 RGB-D
+传感器，优先采集操作者不入镜的受控 static/moving box 小序列；否则只能另立
+有文献依据的 motion-grouping development shadow，明确没有独立精度真值。
+
+新增/修改：
+
+```text
+DT-SLAM/tools/prepare_bonn_box_motion_observability_review.py
+DT-SLAM/tools/make_rgbd_association.py
+results/g2_6_box_data_2026-07-31/
+```
+
+## 24. 2026-07-31 G1-F1 实验性 tracking 过滤已完成首轮评价
+
+用户修订了研究决策：不再要求几何候选近乎零假阳性。允许少量静态关联被删除，
+前提是最终 ATE/RPE、完整轨迹率和速度没有明显退化。因此 G1-F0 预注册的
+`<=0.20%` 静态预算保留为历史诊断，但不再作为绝对阻断条件。
+
+已实现：
+
+```text
+G2-4F1 sparse ego-flow residual
+→ semantic-blind robust frame scale
+→ q6/q8/q10 candidate
+→ TrackLocalMap SearchLocalPoints 后
+→ existing semantic removal 后
+→ second existing PoseOptimization 前
+→ 清除少量 mvpMapPoints association
+```
+
+保护：
+
+```text
+default OFF
+relocalization window fail-open
+minimum 30 associations
+maximum 5% candidate fraction
+invalid scale/vector fail-open
+no third PoseOptimization
+no mapping veto
+```
+
+静态 `fr1/xyz` 四组轨迹均完整，q6/q8/q10 相对 control 的 ATE/RPE 变化约
+`-0.2%` 到 `+1.7%`。
+
+`fr3/walking_xyz` 在线 CUDA semantic+geometry 三轮均完整：
+
+| 模式 | ATE RMSE 中位数 | RPE RMSE 中位数 | actual FPS 中位数 |
+|---|---:|---:|---:|
+| semantic control | 0.017699 m | 0.012224 | 27.4836 |
+| q6 | 0.014927 m | 0.011882 | 27.3397 |
+| q8 | 0.016116 m | 0.011923 | 27.3607 |
+| q10 | 0.015462 m | 0.011986 | 27.3472 |
+
+三个 q 在该序列的 ATE 中位数改善约 `8.9%–15.7%`，RPE 改善约
+`2.0%–2.8%`，FPS 代价约 `0.5%`。这些结果允许保留 G1-F1，但不足以选择
+最终 q 或声明未知箱子已解决。
+
+41 个 CSV、26,928 个 frame row 的 safety audit：
+
+```text
+invariant violations = 0
+pose_reoptimization  = none
+mapping_veto         = none
+```
+
+当前状态：
+
+```text
+G1-F1 experimental tracking filter   KEEP, default OFF
+experimental working point           q10 (conservative)
+unknown-box claim                    NOT ESTABLISHED
+G1-M / G1-D                          LOCKED
+```
+
+`fr3/sitting_static` 的三轮 semantic-control/q6/q8/q10 也全部覆盖 680 帧。
+相对 semantic control，ATE 中位变化为：
+
+```text
+q6   -2.10%
+q8   +3.82%
+q10  -3.37%
+```
+
+没有达到约 10% 的工程退化线。
+
+Bonn balloon 也完成三轮 12 次完整轨迹：
+
+```text
+q6   ATE -5.41%, RPE +2.14%
+q8   ATE -6.44%, RPE +0.66%
+q10  ATE -1.77%, RPE +0.17%
+```
+
+三条 semantic 序列均无明显 ATE 退化。q10 虽不是单序列最好值，但删除最少，
+Bonn RPE 变化最小，故冻结为后续保守实验工作点；q6/q8 保留为固定消融，配置
+默认仍关闭。
+
+下一步：
+
+1. 进入 G1-M0 MapPoint 写入 counterfactual，只统计 q10 候选可能阻止的
+   RGB-D initialization / CreateNewKeyFrame MapPoint；
+2. 不修改地图，不顺带实现 G1-D；
+3. 只有 counterfactual 证明实际作用且安全条件明确，才设计默认关闭的
+   mapping veto；
+4. depth-region 过滤继续锁定。
+
+详细记录：
+
+- `results/g1_f1_2026-07-31/G1_F1_SPARSE_EGO_FLOW_TRACKING_FILTER_SPEC.md`
+- `results/g1_f1_2026-07-31/G1_F1_SPARSE_EGO_FLOW_TRACKING_FILTER_RESULT.md`
+- `results/g1_f1_2026-07-31/G1_F1_FORMAL_METRICS.csv`
+- `results/g1_f1_2026-07-31/filter_invariant_audit.json`
+
+## 25. 2026-07-31 G1-M0 MapPoint admission counterfactual 完成
+
+G1-F1 完成后，继续执行原始目标中的独立地图写入检查。当前调用图确认：
+
+```text
+G1-F1 清除 association
+→ NeedNewKeyFrame
+→ CreateNewKeyFrame
+→ 无 MapPoint 且有 RGB-D depth
+→ 同一 feature 可被重新创建为 MapPoint
+```
+
+新增默认关闭、只读的 G1-M0：
+
+```text
+Geometry.SparseFlowMappingCounterfactualEnable
+DT_SLAM_GEOMETRY_MAPPING_COUNTERFACTUAL
+DT_SLAM_GEOMETRY_MAPPING_COUNTERFACTUAL_CSV
+```
+
+只允许与 RGB-D、G1-F1 q10 同时启用。记录初始化、新关键帧、候选 MapPoint
+创建及 tracking 删除后重建，不设置 dynamic flag、不 veto 地图。
+
+在线 CUDA semantic，三轮中位：
+
+| 序列 | q10 candidate MapPoint | candidate/全部创建 | 删除后重建 |
+|---|---:|---:|---:|
+| walking | 653 | 2.411% | 141 |
+| sitting_static | 3 | 0.092% | 0 |
+| Bonn balloon | 202 | 1.714% | 25 |
+
+10 个 CSV、1,038 个写图事件全部通过：
+
+```text
+candidate created              2,503
+tracking removed then recreated  461
+invariant violations               0
+mapping mutation                  none
+mapping veto                      none
+```
+
+首帧没有上一帧参考，F1 几何不可用；不能伪造初始化保护。
+
+当前状态：
+
+```text
+G1-M0                              PASS
+candidate admission                NON-ZERO, REPEATABLE
+G1-M1                              JUSTIFIED, NOT IMPLEMENTED
+G1-D                               LOCKED
+```
+
+下一步 G1-M1 应复用统一 `mvbDynamic`：
+
+1. 只在成功跟踪且准备创建 KeyFrame 时融合通过安全条件的 q10 candidate；
+2. 在 KeyFrame 构造前调用既有 `RemoveDynamicAssociations()`；
+3. 复用 RGB-D `!mvbDynamic` admission 与现有 LocalMapping 两端 guard；
+4. 默认关闭，重新跑 semantic-control / F1 / F1+M1；
+5. 不修改 Optimizer/g2o/YOLO，不引入另一套后端状态。
+
+详细记录：
+
+- `results/g1_m0_2026-07-31/G1_M0_MAPPOINT_ADMISSION_COUNTERFACTUAL_SPEC.md`
+- `results/g1_m0_2026-07-31/G1_M0_MAPPOINT_ADMISSION_COUNTERFACTUAL_RESULT.md`
+- `results/g1_m0_2026-07-31/G1_M0_FORMAL_METRICS.csv`
+- `results/g1_m0_2026-07-31/mapping_counterfactual_audit.json`
+
+## 26. 2026-07-31 G1-M1 稀疏 MapPoint 写入保护完成
+
+默认关闭的 G1-M1 已实现并通过四类序列验证。它只在
+`CreateNewKeyFrame()` 构造 KeyFrame 前，将通过安全条件的 q10 candidate
+并入已有 `mCurrentFrame.mvbDynamic`，随后复用现有 association 清理、
+RGB-D depth admission 和 LocalMapping dynamic endpoint guard。
+
+新增配置：
+
+```text
+Geometry.SparseFlowMappingFilterEnable
+Geometry.SparseFlowMappingFilterMaximumFeatureFraction
+Geometry.SparseFlowMappingFilterMaximumDepthFraction
+Geometry.SparseFlowMappingFilterMinimumRemainingDepthFeatures
+```
+
+新增环境变量：
+
+```text
+DT_SLAM_GEOMETRY_MAPPING_FILTER
+DT_SLAM_GEOMETRY_MAPPING_FILTER_CSV
+```
+
+限制：
+
+```text
+RGB-D + G1-F1 q10
+G1-M0 与 G1-M1 不可同时启用
+首帧 reference unavailable，几何 fail-open
+feature/depth candidate fraction <= 5%
+remaining valid depth >= 100
+```
+
+三轮中位数：
+
+| 序列 | ATE | RPE | FPS | 轨迹 |
+|---|---:|---:|---:|---:|
+| walking | 0.017864 | 0.012343 | 27.479 | 827/827 |
+| sitting | 0.006596 | 0.005669 | 27.890 | 680/680 |
+| Bonn balloon | 0.032519 | 0.041264 | 29.538 | 438/438 |
+| fr1/xyz | 0.009643 | 0.005777 | 29.624 | 792/792 |
+
+相对各自 control，ATE/RPE 中位变化均在约 3% 内。12 次正式运行合计
+2,619 个新 dynamic flag、2,441 个有效深度 veto，所有 applied 行的
+candidate-created MapPoint 为 0，全部审计无违反。
+
+Viewer ON 的 G1-M1 和关闭几何过滤的语义 control 均在轨迹保存完成后
+exit 139。该对照说明退出问题与 G1-M1 无关；正式 Viewer OFF 运行均正常。
+不要在本阶段顺带修改 Viewer。
+
+当前交接：
+
+```text
+G1-F1 + G1-M1 sparse frontend   READY FOR EXPERIMENTS, default OFF
+mapping cleanliness GT          not measured
+G1-D pixel/depth mask           still unresolved
+Optimizer/g2o/YOLO/backend      unchanged
+```
+
+下一步先冻结可复现使用说明。若继续研究，优先选择：
+
+1. 地图质量定性/定量评价；
+2. 或重新定义有文献依据的 G1-D，但不得把 sparse candidate 直接膨胀成
+   dense dynamic mask。
+
+详细记录：
+
+- `results/g1_m1_2026-07-31/G1_M1_MAPPOINT_ADMISSION_FILTER_SPEC.md`
+- `results/g1_m1_2026-07-31/G1_M1_MAPPOINT_ADMISSION_FILTER_RESULT.md`
+- `results/g1_m1_2026-07-31/G1_M1_FORMAL_METRICS.csv`
+- `results/g1_m1_2026-07-31/mapping_filter_audit.json`
+
+## 27. 2026-07-31 G1 稀疏地图质量评价完成
+
+新增默认关闭的 read-only MapPoint lifecycle audit：
+
+```text
+Geometry.SparseFlowMapQualityAuditEnable
+DT_SLAM_GEOMETRY_MAP_QUALITY_AUDIT
+DT_SLAM_GEOMETRY_MAP_QUALITY_PREFIX
+```
+
+它仅允许在 `RGB-D + G1-F1 q10 + (G1-M0 xor G1-M1)` 下启用，在 shutdown
+阶段沿 replacement chain 统计 candidate MapPoint 是否最终存活，并输出 final
+MapPoint/KeyFrame/observation 摘要。没有直接 map mutation。
+
+walking 三轮中位数从 M0 的 `711 created / 25 survived` 变为 M1 fail-open 的
+`174 created / 5 survived`；M1 中位应用 92 个 KeyFrame event，否决 662 个
+有效深度候选。ATE 中位数由 0.019059 m 变为 0.016745 m，但 RPE 由
+0.012335 变为 0.012486，不能声称定位稳定改善。
+
+fr1/xyz、Bonn balloon、sitting 各完成一轮成对检查，轨迹覆盖全部完整；没有
+发现静态地图灾难性退化。注意 q10 candidate 不是动态 GT，ORB-SLAM2 又会自然
+剔除绝大多数临时 MapPoint，因此当前只能确认 admission protection 生效，不能
+声称已经精确测得动态地图污染或显著提高地图精度。
+
+交接状态：
+
+```text
+G1-F1 tracking filter                experimentally usable, default OFF
+G1-M1 MapPoint admission filter      experimentally usable, default OFF
+final-map proxy audit                complete, read-only
+exact map dynamic GT                 unavailable
+G1-D pixel/depth filtering           locked
+```
+
+详细记录：
+
+- `results/g1_map_quality_2026-07-31/G1_SPARSE_MAP_QUALITY_EVALUATION_SPEC.md`
+- `results/g1_map_quality_2026-07-31/G1_SPARSE_MAP_QUALITY_EVALUATION_RESULT.md`
+- `results/g1_map_quality_2026-07-31/G1_MAP_QUALITY_FORMAL_METRICS.csv`
+- `DT-SLAM/tools/audit_sparse_map_quality.py`

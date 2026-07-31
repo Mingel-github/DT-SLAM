@@ -1,0 +1,233 @@
+{
+  "files": [
+    {
+      "applied_frames": 199,
+      "baseline_associations": 254397,
+      "candidate_associations": 502,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_walking/trial1/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 493,
+      "removed_fraction_of_baseline": 0.0019379159345432532,
+      "rows": 826,
+      "states": {
+        "applied": 199,
+        "no_candidate_association": 598,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 195,
+      "baseline_associations": 254927,
+      "candidate_associations": 522,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_walking/trial2/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 512,
+      "removed_fraction_of_baseline": 0.002008418096160862,
+      "rows": 826,
+      "states": {
+        "applied": 195,
+        "no_candidate_association": 602,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 174,
+      "baseline_associations": 260557,
+      "candidate_associations": 517,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_walking/trial3/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 506,
+      "removed_fraction_of_baseline": 0.0019419934985435048,
+      "rows": 826,
+      "states": {
+        "applied": 174,
+        "no_candidate_association": 623,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 14,
+      "baseline_associations": 179192,
+      "candidate_associations": 23,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_sitting/trial1/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 22,
+      "removed_fraction_of_baseline": 0.00012277333809545068,
+      "rows": 679,
+      "states": {
+        "applied": 14,
+        "no_candidate_association": 636,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 18,
+      "baseline_associations": 183224,
+      "candidate_associations": 24,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_sitting/trial2/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 21,
+      "removed_fraction_of_baseline": 0.00011461380605160896,
+      "rows": 679,
+      "states": {
+        "applied": 18,
+        "no_candidate_association": 632,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 10,
+      "baseline_associations": 178446,
+      "candidate_associations": 13,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_sitting/trial3/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 12,
+      "removed_fraction_of_baseline": 6.724723445748293e-05,
+      "rows": 679,
+      "states": {
+        "applied": 10,
+        "no_candidate_association": 640,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 82,
+      "baseline_associations": 187226,
+      "candidate_associations": 212,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_bonn_balloon/trial1/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 206,
+      "removed_fraction_of_baseline": 0.0011002745345197783,
+      "rows": 437,
+      "states": {
+        "applied": 82,
+        "no_candidate_association": 326,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 106,
+      "baseline_associations": 190850,
+      "candidate_associations": 243,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_bonn_balloon/trial2/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 238,
+      "removed_fraction_of_baseline": 0.0012470526591564055,
+      "rows": 437,
+      "states": {
+        "applied": 106,
+        "no_candidate_association": 302,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 96,
+      "baseline_associations": 193398,
+      "candidate_associations": 261,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_bonn_balloon/trial3/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 255,
+      "removed_fraction_of_baseline": 0.0013185244935314739,
+      "rows": 437,
+      "states": {
+        "applied": 96,
+        "no_candidate_association": 312,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 135,
+      "baseline_associations": 460462,
+      "candidate_associations": 360,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_fr1_xyz/trial1/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 328,
+      "removed_fraction_of_baseline": 0.0007123280531292484,
+      "rows": 791,
+      "states": {
+        "applied": 135,
+        "no_candidate_association": 627,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 133,
+      "baseline_associations": 462691,
+      "candidate_associations": 361,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_fr1_xyz/trial2/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 331,
+      "removed_fraction_of_baseline": 0.0007153802429699303,
+      "rows": 791,
+      "states": {
+        "applied": 133,
+        "no_candidate_association": 629,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 140,
+      "baseline_associations": 465286,
+      "candidate_associations": 365,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m1_2026-07-31/formal_fr1_xyz/trial3/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 335,
+      "removed_fraction_of_baseline": 0.000719987276642753,
+      "rows": 791,
+      "states": {
+        "applied": 140,
+        "no_candidate_association": 622,
+        "relocalization_window_fail_open": 29
+      }
+    }
+  ],
+  "passed": true
+}

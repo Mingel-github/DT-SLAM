@@ -2024,6 +2024,101 @@ GeometricDynamicDetector::ComputeSparseEgoFlow(
     return result;
 }
 
+GeometricSparseFlowFilterResult
+GeometricDynamicDetector::SelectSparseFlowHighResidualCandidates(
+    const GeometricSparseFlowResult &sparseFlow,
+    const std::vector<unsigned char> &semanticDynamic,
+    const float qThreshold,
+    const float maximumForwardBackwardErrorPixels,
+    const std::size_t minimumScaleSupport,
+    const float scaleFactor,
+    const float scaleFloorPixels)
+{
+    if(!std::isfinite(qThreshold) || qThreshold<=0.0f ||
+       !std::isfinite(maximumForwardBackwardErrorPixels) ||
+       maximumForwardBackwardErrorPixels<0.0f ||
+       minimumScaleSupport==0 ||
+       !std::isfinite(scaleFactor) || scaleFactor<=0.0f ||
+       !std::isfinite(scaleFloorPixels) || scaleFloorPixels<=0.0f)
+    {
+        throw std::invalid_argument(
+            "sparse-flow filter parameters must be finite and positive");
+    }
+    if(!semanticDynamic.empty() &&
+       semanticDynamic.size()!=sparseFlow.samples.size())
+    {
+        throw std::invalid_argument(
+            "sparse-flow semantic flags must be empty or match samples");
+    }
+
+    GeometricSparseFlowFilterResult result;
+    result.candidateMask.assign(sparseFlow.samples.size(),0);
+    std::vector<float> scaleResiduals;
+    scaleResiduals.reserve(sparseFlow.samples.size());
+    std::vector<unsigned char> qualityEligible(
+        sparseFlow.samples.size(),0);
+    for(std::size_t index=0;
+        index<sparseFlow.samples.size(); ++index)
+    {
+        const GeometricSparseFlowSample &sample =
+            sparseFlow.samples[index];
+        if(sample.featureIndex!=index)
+        {
+            throw std::invalid_argument(
+                "sparse-flow sample indices must be contiguous");
+        }
+        const bool eligible =
+            sample.evidenceState==
+                GeometricSparseFlowEvidenceState::Measured &&
+            std::isfinite(sample.forwardBackwardErrorPixels) &&
+            sample.forwardBackwardErrorPixels<=
+                maximumForwardBackwardErrorPixels &&
+            std::isfinite(sample.slamResidualMagnitudePixels) &&
+            sample.slamResidualMagnitudePixels>=0.0f;
+        if(!eligible)
+            continue;
+        qualityEligible[index] = 1;
+        ++result.qualityEligibleFeatureCount;
+        scaleResiduals.push_back(
+            sample.slamResidualMagnitudePixels);
+    }
+
+    result.scaleSupport = scaleResiduals.size();
+    if(result.scaleSupport<minimumScaleSupport)
+        return result;
+
+    result.frameScalePixels = std::max(
+        scaleFloorPixels,
+        scaleFactor*static_cast<float>(
+            Percentile(scaleResiduals,0.5)));
+    result.scaleValid =
+        std::isfinite(result.frameScalePixels) &&
+        result.frameScalePixels>0.0f;
+    if(!result.scaleValid)
+        return result;
+
+    for(std::size_t index=0;
+        index<sparseFlow.samples.size(); ++index)
+    {
+        if(!qualityEligible[index] ||
+           (!semanticDynamic.empty() &&
+            semanticDynamic[index]!=0))
+        {
+            continue;
+        }
+        const float q =
+            sparseFlow.samples[index].
+                slamResidualMagnitudePixels/
+            result.frameScalePixels;
+        if(std::isfinite(q) && q>=qThreshold)
+        {
+            result.candidateMask[index] = 1;
+            ++result.candidateFeatureCount;
+        }
+    }
+    return result;
+}
+
 const char *GeometricDynamicDetector::SparseFlowEvidenceStateName(
     const GeometricSparseFlowEvidenceState state)
 {

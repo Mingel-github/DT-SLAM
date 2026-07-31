@@ -129,19 +129,19 @@ label overlay 和 contact sheet。
 
 ### 5.1 纯表示统计
 
-| 序列 | 帧数 | normal 区域数中位 | ≤64 px 区域比例中位 | boundary/valid 中位 | 最大区域/segmentable 中位 | normal Python 时延中位 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| balloon | 8 | 2487 | 94.51% | 29.63% | 29.46% | 214.68 ms |
-| balloon2 | 9 | 2669 | 94.98% | 29.14% | 23.71% | 214.89 ms |
-| fr1/xyz static | 150 | 406 | 93.38% | 8.33% | 68.87% | 194.65 ms |
+| 序列             | 帧数  | normal 区域数中位 | ≤64 px 区域比例中位 | boundary/valid 中位 | 最大区域/segmentable 中位 | normal Python 时延中位 |
+| -------------- | ---:| ------------:| -------------:| -----------------:| -------------------:| ------------------:|
+| balloon        | 8   | 2487         | 94.51%        | 29.63%            | 29.46%              | 214.68 ms          |
+| balloon2       | 9   | 2669         | 94.98%        | 29.14%            | 23.71%              | 214.89 ms          |
+| fr1/xyz static | 150 | 406          | 93.38%        | 8.33%             | 68.87%              | 194.65 ms          |
 
 对照 G2-3R0：
 
-| 序列 | baseline 区域数中位 | 最大区域/segmentable 中位 | baseline Python 时延中位 |
-| --- | ---: | ---: | ---: |
-| balloon | 25 | 85.36% | 3.52 ms |
-| balloon2 | 27 | 67.03% | 3.48 ms |
-| fr1/xyz static | 15 | 82.97% | 3.28 ms |
+| 序列             | baseline 区域数中位 | 最大区域/segmentable 中位 | baseline Python 时延中位 |
+| -------------- | --------------:| -------------------:| --------------------:|
+| balloon        | 25             | 85.36%              | 3.52 ms              |
+| balloon2       | 27             | 67.03%              | 3.48 ms              |
+| fr1/xyz static | 15             | 82.97%              | 3.28 ms              |
 
 这里的时延来自未优化 Python/NumPy/OpenCV 离线审计，不能解释成等价 C++ 在线
 时延；但足以说明当前原型不是可直接接入前端的实现。
@@ -150,14 +150,14 @@ label overlay 和 contact sheet。
 
 17 帧合并后：
 
-| 指标 | normal+distance | G2-3R0 oracle 对照 |
-| --- | ---: | ---: |
-| best single-segment bbox coverage 中位 | **0.488** | 0.679 |
-| best single-segment bbox purity 中位 | 1.000 | 0.998 |
-| best single-segment bbox IoU 中位 | 0.488 | 0.554 |
-| 可形成 selected/background residual 比较 | 14/17 | 16/17 |
-| selected median > background | 14/14 | 14/16 |
-| inside-box median > background | 16/16 | 16/16 |
+| 指标                                   | normal+distance | G2-3R0 oracle 对照 |
+| ------------------------------------ | ---------------:| ----------------:|
+| best single-segment bbox coverage 中位 | **0.488**       | 0.679            |
+| best single-segment bbox purity 中位   | 1.000           | 0.998            |
+| best single-segment bbox IoU 中位      | 0.488           | 0.554            |
+| 可形成 selected/background residual 比较  | 14/17           | 16/17            |
+| selected median > background         | 14/14           | 14/16            |
+| inside-box median > background       | 16/16           | 16/16            |
 
 normal+distance 的 oracle target 片段较纯，但覆盖更低。最关键的是：
 
@@ -184,14 +184,14 @@ boundary/unknown；后续无论组合多少 `label>=0` segment 都无法恢复 8
 
 ## 6. 预注册条件判定
 
-| 条件 | 结果 |
-| --- | --- |
-| 已知大背景泄漏能否被切开 | oracle 上可以，但无部署 selector |
-| 14 个可比较帧是否保持 motion residual 方向 | 14/14，保持 |
-| 目标是否不依赖大量微小 segment | **失败** |
+| 条件                                    | 结果                              |
+| ------------------------------------- | ------------------------------- |
+| 已知大背景泄漏能否被切开                          | oracle 上可以，但无部署 selector        |
+| 14 个可比较帧是否保持 motion residual 方向       | 14/14，保持                        |
+| 目标是否不依赖大量微小 segment                   | **失败**                          |
 | fr1/xyz 是否完全退化成全图单 segment/全 boundary | 未出现极端二值退化，但仍有 406 区域、93.38% 小区域 |
-| 确定性 | 通过 |
-| 是否需要观察结果后调参数才能继续 | 是；预注册禁止 |
+| 确定性                                   | 通过                              |
+| 是否需要观察结果后调参数才能继续                      | 是；预注册禁止                         |
 
 最终按停止条件：
 

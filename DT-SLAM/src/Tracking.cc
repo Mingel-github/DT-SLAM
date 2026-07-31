@@ -46,6 +46,7 @@
 #include <iomanip>
 #include<iostream>
 #include <limits>
+#include <numeric>
 #include <sstream>
 
 #include<mutex>
@@ -326,6 +327,20 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mnGeometryMultiReferenceComputedFrames(0),
     mbGeometrySparseEgoFlowShadowEnabled(false),
     mnGeometrySparseFlowComputedFrames(0),
+    mbGeometrySparseFlowCounterfactualShadowEnabled(false),
+    mbGeometrySparseFlowTrackingFilterEnabled(false),
+    mfGeometrySparseFlowTrackingFilterQ(10.0f),
+    mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction(0.05f),
+    mnGeometrySparseFlowTrackingFilterMinimumAssociations(30),
+    mnGeometrySparseFlowTrackingFilterMinimumScaleSupport(20),
+    mbCurrentSparseFlowTrackingSafeguardsPassed(false),
+    mCurrentSparseFlowTrackingSafeguardState("not_evaluated"),
+    mbGeometrySparseFlowMappingCounterfactualEnabled(false),
+    mbGeometrySparseFlowMappingFilterEnabled(false),
+    mfGeometrySparseFlowMappingFilterMaximumFeatureFraction(0.05f),
+    mfGeometrySparseFlowMappingFilterMaximumDepthFraction(0.05f),
+    mnGeometrySparseFlowMappingFilterMinimumRemainingDepthFeatures(100),
+    mbGeometrySparseFlowMapQualityAuditEnabled(false),
     mbGeometryLocalRigidityShadowEnabled(false),
     mnGeometryLocalRigidityComputedFrames(0),
     mbGeometryRegionEvidenceShadowEnabled(false),
@@ -480,6 +495,293 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         throw std::invalid_argument(
             "Geometry.SparseEgoFlowShadowEnable=1 requires "
             "Geometry.Enable=1 and RGB-D input");
+    }
+    const cv::FileNode geometrySparseFlowCounterfactualNode =
+        fSettings[
+            "Geometry.SparseFlowCounterfactualShadowEnable"];
+    if(!geometrySparseFlowCounterfactualNode.empty())
+    {
+        mbGeometrySparseFlowCounterfactualShadowEnabled =
+            static_cast<int>(
+                geometrySparseFlowCounterfactualNode)!=0;
+    }
+    const char *geometrySparseFlowCounterfactualOverride =
+        std::getenv(
+            "DT_SLAM_GEOMETRY_ASSOCIATION_COUNTERFACTUAL");
+    if(geometrySparseFlowCounterfactualOverride &&
+       geometrySparseFlowCounterfactualOverride[0]!='\0')
+    {
+        mbGeometrySparseFlowCounterfactualShadowEnabled =
+            std::string(
+                geometrySparseFlowCounterfactualOverride)!="0";
+    }
+    if(mbGeometrySparseFlowCounterfactualShadowEnabled &&
+       !mbGeometrySparseEgoFlowShadowEnabled)
+    {
+        throw std::invalid_argument(
+            "Geometry.SparseFlowCounterfactualShadowEnable=1 "
+            "requires Geometry.SparseEgoFlowShadowEnable=1");
+    }
+    const cv::FileNode geometrySparseFlowTrackingFilterNode =
+        fSettings["Geometry.SparseFlowTrackingFilterEnable"];
+    if(!geometrySparseFlowTrackingFilterNode.empty())
+    {
+        mbGeometrySparseFlowTrackingFilterEnabled =
+            static_cast<int>(
+                geometrySparseFlowTrackingFilterNode)!=0;
+    }
+    const char *geometrySparseFlowTrackingFilterOverride =
+        std::getenv("DT_SLAM_GEOMETRY_TRACKING_FILTER");
+    if(geometrySparseFlowTrackingFilterOverride &&
+       geometrySparseFlowTrackingFilterOverride[0]!='\0')
+    {
+        mbGeometrySparseFlowTrackingFilterEnabled =
+            std::string(
+                geometrySparseFlowTrackingFilterOverride)!="0";
+    }
+    const cv::FileNode geometrySparseFlowTrackingFilterQNode =
+        fSettings["Geometry.SparseFlowTrackingFilterQ"];
+    if(!geometrySparseFlowTrackingFilterQNode.empty())
+    {
+        mfGeometrySparseFlowTrackingFilterQ =
+            static_cast<float>(
+                geometrySparseFlowTrackingFilterQNode);
+    }
+    const char *geometrySparseFlowTrackingFilterQOverride =
+        std::getenv("DT_SLAM_GEOMETRY_TRACKING_FILTER_Q");
+    if(geometrySparseFlowTrackingFilterQOverride &&
+       geometrySparseFlowTrackingFilterQOverride[0]!='\0')
+    {
+        std::size_t parsedCharacters = 0;
+        try
+        {
+            mfGeometrySparseFlowTrackingFilterQ =
+                std::stof(
+                    geometrySparseFlowTrackingFilterQOverride,
+                    &parsedCharacters);
+        }
+        catch(const std::exception &)
+        {
+            throw std::invalid_argument(
+                "DT_SLAM_GEOMETRY_TRACKING_FILTER_Q "
+                "must be 6, 8, or 10");
+        }
+        if(parsedCharacters!=
+           std::string(
+               geometrySparseFlowTrackingFilterQOverride).size())
+        {
+            throw std::invalid_argument(
+                "DT_SLAM_GEOMETRY_TRACKING_FILTER_Q "
+                "must be 6, 8, or 10");
+        }
+    }
+    const bool supportedTrackingFilterQ =
+        std::abs(mfGeometrySparseFlowTrackingFilterQ-6.0f)<1e-6f ||
+        std::abs(mfGeometrySparseFlowTrackingFilterQ-8.0f)<1e-6f ||
+        std::abs(mfGeometrySparseFlowTrackingFilterQ-10.0f)<1e-6f;
+    if(!supportedTrackingFilterQ)
+    {
+        throw std::invalid_argument(
+            "Geometry.SparseFlowTrackingFilterQ must be 6, 8, or 10");
+    }
+    const cv::FileNode geometrySparseFlowTrackingFilterMaximumNode =
+        fSettings[
+            "Geometry.SparseFlowTrackingFilterMaximumAssociationFraction"];
+    if(!geometrySparseFlowTrackingFilterMaximumNode.empty())
+    {
+        mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction =
+            static_cast<float>(
+                geometrySparseFlowTrackingFilterMaximumNode);
+    }
+    const cv::FileNode geometrySparseFlowTrackingFilterMinimumNode =
+        fSettings[
+            "Geometry.SparseFlowTrackingFilterMinimumAssociations"];
+    if(!geometrySparseFlowTrackingFilterMinimumNode.empty())
+    {
+        mnGeometrySparseFlowTrackingFilterMinimumAssociations =
+            static_cast<int>(
+                geometrySparseFlowTrackingFilterMinimumNode);
+    }
+    const cv::FileNode geometrySparseFlowTrackingFilterScaleSupportNode =
+        fSettings[
+            "Geometry.SparseFlowTrackingFilterMinimumScaleSupport"];
+    if(!geometrySparseFlowTrackingFilterScaleSupportNode.empty())
+    {
+        const int configuredScaleSupport =
+            static_cast<int>(
+                geometrySparseFlowTrackingFilterScaleSupportNode);
+        if(configuredScaleSupport<=0)
+        {
+            throw std::invalid_argument(
+                "Geometry.SparseFlowTrackingFilterMinimumScaleSupport "
+                "must be positive");
+        }
+        mnGeometrySparseFlowTrackingFilterMinimumScaleSupport =
+            static_cast<std::size_t>(configuredScaleSupport);
+    }
+    if(mbGeometrySparseFlowTrackingFilterEnabled &&
+       (!mbGeometrySparseEgoFlowShadowEnabled ||
+        sensor!=System::RGBD))
+    {
+        throw std::invalid_argument(
+            "Geometry.SparseFlowTrackingFilterEnable=1 requires "
+            "Geometry.SparseEgoFlowShadowEnable=1 and RGB-D input");
+    }
+    if(mbGeometrySparseFlowTrackingFilterEnabled &&
+       mbGeometrySparseFlowCounterfactualShadowEnabled)
+    {
+        throw std::invalid_argument(
+            "G1-F1 tracking filter and G1-F0B counterfactual "
+            "snapshots cannot be enabled together");
+    }
+    if(!std::isfinite(
+           mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction) ||
+       mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction<=0.0f ||
+       mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction>1.0f ||
+       mnGeometrySparseFlowTrackingFilterMinimumAssociations<1)
+    {
+        throw std::invalid_argument(
+            "G1-F1 association safeguards are invalid");
+    }
+    const cv::FileNode geometrySparseFlowMappingCounterfactualNode =
+        fSettings[
+            "Geometry.SparseFlowMappingCounterfactualEnable"];
+    if(!geometrySparseFlowMappingCounterfactualNode.empty())
+    {
+        mbGeometrySparseFlowMappingCounterfactualEnabled =
+            static_cast<int>(
+                geometrySparseFlowMappingCounterfactualNode)!=0;
+    }
+    const char *geometrySparseFlowMappingCounterfactualOverride =
+        std::getenv(
+            "DT_SLAM_GEOMETRY_MAPPING_COUNTERFACTUAL");
+    if(geometrySparseFlowMappingCounterfactualOverride &&
+       geometrySparseFlowMappingCounterfactualOverride[0]!='\0')
+    {
+        mbGeometrySparseFlowMappingCounterfactualEnabled =
+            std::string(
+                geometrySparseFlowMappingCounterfactualOverride)!="0";
+    }
+    if(mbGeometrySparseFlowMappingCounterfactualEnabled &&
+       (!mbGeometrySparseFlowTrackingFilterEnabled ||
+        std::abs(
+            mfGeometrySparseFlowTrackingFilterQ-10.0f)>1e-6f ||
+        sensor!=System::RGBD))
+    {
+        throw std::invalid_argument(
+            "G1-M0 mapping counterfactual requires RGB-D and "
+            "G1-F1 tracking filter q10");
+    }
+    const cv::FileNode geometrySparseFlowMappingFilterNode =
+        fSettings[
+            "Geometry.SparseFlowMappingFilterEnable"];
+    if(!geometrySparseFlowMappingFilterNode.empty())
+    {
+        mbGeometrySparseFlowMappingFilterEnabled =
+            static_cast<int>(
+                geometrySparseFlowMappingFilterNode)!=0;
+    }
+    const char *geometrySparseFlowMappingFilterOverride =
+        std::getenv("DT_SLAM_GEOMETRY_MAPPING_FILTER");
+    if(geometrySparseFlowMappingFilterOverride &&
+       geometrySparseFlowMappingFilterOverride[0]!='\0')
+    {
+        mbGeometrySparseFlowMappingFilterEnabled =
+            std::string(
+                geometrySparseFlowMappingFilterOverride)!="0";
+    }
+    const cv::FileNode mappingMaximumFeatureFractionNode =
+        fSettings[
+            "Geometry.SparseFlowMappingFilterMaximumFeatureFraction"];
+    if(!mappingMaximumFeatureFractionNode.empty())
+    {
+        mfGeometrySparseFlowMappingFilterMaximumFeatureFraction =
+            static_cast<float>(
+                mappingMaximumFeatureFractionNode);
+    }
+    const cv::FileNode mappingMaximumDepthFractionNode =
+        fSettings[
+            "Geometry.SparseFlowMappingFilterMaximumDepthFraction"];
+    if(!mappingMaximumDepthFractionNode.empty())
+    {
+        mfGeometrySparseFlowMappingFilterMaximumDepthFraction =
+            static_cast<float>(
+                mappingMaximumDepthFractionNode);
+    }
+    const cv::FileNode mappingMinimumRemainingDepthNode =
+        fSettings[
+            "Geometry.SparseFlowMappingFilterMinimumRemainingDepthFeatures"];
+    if(!mappingMinimumRemainingDepthNode.empty())
+    {
+        const int minimumRemainingDepth =
+            static_cast<int>(
+                mappingMinimumRemainingDepthNode);
+        if(minimumRemainingDepth<1)
+        {
+            throw std::invalid_argument(
+                "Geometry.SparseFlowMappingFilterMinimumRemainingDepthFeatures "
+                "must be positive");
+        }
+        mnGeometrySparseFlowMappingFilterMinimumRemainingDepthFeatures =
+            static_cast<std::size_t>(
+                minimumRemainingDepth);
+    }
+    if(!std::isfinite(
+           mfGeometrySparseFlowMappingFilterMaximumFeatureFraction) ||
+       mfGeometrySparseFlowMappingFilterMaximumFeatureFraction<=0.0f ||
+       mfGeometrySparseFlowMappingFilterMaximumFeatureFraction>1.0f ||
+       !std::isfinite(
+           mfGeometrySparseFlowMappingFilterMaximumDepthFraction) ||
+       mfGeometrySparseFlowMappingFilterMaximumDepthFraction<=0.0f ||
+       mfGeometrySparseFlowMappingFilterMaximumDepthFraction>1.0f)
+    {
+        throw std::invalid_argument(
+            "G1-M1 mapping safeguard fractions are invalid");
+    }
+    if(mbGeometrySparseFlowMappingFilterEnabled &&
+       (!mbGeometrySparseFlowTrackingFilterEnabled ||
+        std::abs(
+            mfGeometrySparseFlowTrackingFilterQ-10.0f)>1e-6f ||
+        sensor!=System::RGBD))
+    {
+        throw std::invalid_argument(
+            "G1-M1 mapping filter requires RGB-D and "
+            "G1-F1 tracking filter q10");
+    }
+    if(mbGeometrySparseFlowMappingFilterEnabled &&
+       mbGeometrySparseFlowMappingCounterfactualEnabled)
+    {
+        throw std::invalid_argument(
+            "G1-M0 counterfactual and G1-M1 mapping filter "
+            "cannot be enabled together");
+    }
+    const cv::FileNode mapQualityAuditNode =
+        fSettings[
+            "Geometry.SparseFlowMapQualityAuditEnable"];
+    if(!mapQualityAuditNode.empty())
+    {
+        mbGeometrySparseFlowMapQualityAuditEnabled =
+            static_cast<int>(mapQualityAuditNode)!=0;
+    }
+    const char *mapQualityAuditOverride =
+        std::getenv("DT_SLAM_GEOMETRY_MAP_QUALITY_AUDIT");
+    if(mapQualityAuditOverride &&
+       mapQualityAuditOverride[0]!='\0')
+    {
+        mbGeometrySparseFlowMapQualityAuditEnabled =
+            std::string(mapQualityAuditOverride)!="0";
+    }
+    if(mbGeometrySparseFlowMapQualityAuditEnabled &&
+       (!mbGeometrySparseFlowTrackingFilterEnabled ||
+        std::abs(
+            mfGeometrySparseFlowTrackingFilterQ-10.0f)>1e-6f ||
+        sensor!=System::RGBD ||
+        (mbGeometrySparseFlowMappingCounterfactualEnabled==
+         mbGeometrySparseFlowMappingFilterEnabled)))
+    {
+        throw std::invalid_argument(
+            "map-quality audit requires RGB-D, G1-F1 q10, "
+            "and exactly one of G1-M0 or G1-M1");
     }
     const cv::FileNode geometryLocalRigidityEnableNode =
         fSettings["Geometry.LocalRigidityShadowEnable"];
@@ -844,6 +1146,79 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
                 std::getenv(
                     "DT_SLAM_GEOMETRY_SPARSE_FLOW_FRAME_IDS"));
     }
+    const char *associationSnapshotCsv =
+        std::getenv(
+            "DT_SLAM_GEOMETRY_ASSOCIATION_SNAPSHOT_CSV");
+    if(associationSnapshotCsv &&
+       associationSnapshotCsv[0]!='\0')
+    {
+        mGeometryAssociationSnapshotCsvPath =
+            associationSnapshotCsv;
+    }
+    if(mbGeometrySparseFlowCounterfactualShadowEnabled &&
+       (mGeometrySparseFlowCsvPath.empty() ||
+        mGeometryAssociationSnapshotCsvPath.empty()))
+    {
+        throw std::invalid_argument(
+            "Geometry.SparseFlowCounterfactualShadowEnable=1 "
+            "requires DT_SLAM_GEOMETRY_SPARSE_FLOW_CSV and "
+            "DT_SLAM_GEOMETRY_ASSOCIATION_SNAPSHOT_CSV");
+    }
+    const char *trackingFilterCsv =
+        std::getenv("DT_SLAM_GEOMETRY_TRACKING_FILTER_CSV");
+    if(trackingFilterCsv && trackingFilterCsv[0]!='\0')
+    {
+        mGeometrySparseFlowTrackingFilterCsvPath =
+            trackingFilterCsv;
+    }
+    if(mbGeometrySparseFlowTrackingFilterEnabled &&
+       mGeometrySparseFlowTrackingFilterCsvPath.empty())
+    {
+        throw std::invalid_argument(
+            "G1-F1 tracking filter requires "
+            "DT_SLAM_GEOMETRY_TRACKING_FILTER_CSV");
+    }
+    const char *mappingCounterfactualCsv =
+        std::getenv(
+            "DT_SLAM_GEOMETRY_MAPPING_COUNTERFACTUAL_CSV");
+    if(mappingCounterfactualCsv &&
+       mappingCounterfactualCsv[0]!='\0')
+    {
+        mGeometrySparseFlowMappingCounterfactualCsvPath =
+            mappingCounterfactualCsv;
+    }
+    if(mbGeometrySparseFlowMappingCounterfactualEnabled &&
+       mGeometrySparseFlowMappingCounterfactualCsvPath.empty())
+    {
+        throw std::invalid_argument(
+            "G1-M0 mapping counterfactual requires "
+            "DT_SLAM_GEOMETRY_MAPPING_COUNTERFACTUAL_CSV");
+    }
+    const char *mappingFilterCsv =
+        std::getenv("DT_SLAM_GEOMETRY_MAPPING_FILTER_CSV");
+    if(mappingFilterCsv && mappingFilterCsv[0]!='\0')
+    {
+        mGeometrySparseFlowMappingFilterCsvPath =
+            mappingFilterCsv;
+    }
+    if(mbGeometrySparseFlowMappingFilterEnabled &&
+       mGeometrySparseFlowMappingFilterCsvPath.empty())
+    {
+        throw std::invalid_argument(
+            "G1-M1 mapping filter requires "
+            "DT_SLAM_GEOMETRY_MAPPING_FILTER_CSV");
+    }
+    const char *mapQualityPrefix =
+        std::getenv("DT_SLAM_GEOMETRY_MAP_QUALITY_PREFIX");
+    if(mapQualityPrefix && mapQualityPrefix[0]!='\0')
+        mGeometrySparseFlowMapQualityPrefix = mapQualityPrefix;
+    if(mbGeometrySparseFlowMapQualityAuditEnabled &&
+       mGeometrySparseFlowMapQualityPrefix.empty())
+    {
+        throw std::invalid_argument(
+            "map-quality audit requires "
+            "DT_SLAM_GEOMETRY_MAP_QUALITY_PREFIX");
+    }
     const char *localRigidityCsv =
         std::getenv("DT_SLAM_GEOMETRY_LOCAL_RIGIDITY_CSV");
     if(localRigidityCsv && localRigidityCsv[0]!='\0')
@@ -1050,6 +1425,83 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         {
             cout << "- feature shadow diagnostics (r=0,1,2,3 px): "
                  << mGeometryFeatureShadowCsvPath << endl;
+        }
+        cout << "- G2-4F1 sparse ego-flow shadow: "
+             << (mbGeometrySparseEgoFlowShadowEnabled
+                     ? "enabled" : "disabled") << endl;
+        cout << "- G1-F0B association counterfactual snapshots: "
+             << (mbGeometrySparseFlowCounterfactualShadowEnabled
+                     ? "enabled" : "disabled") << endl;
+        if(mbGeometrySparseFlowCounterfactualShadowEnabled)
+        {
+            cout << "- G1-F0B output: raw association state only; "
+                 << "dynamic_decision=none; "
+                 << "direct_slam_state_mutation=none" << endl;
+        }
+        cout << "- G1-F1 sparse-flow tracking association filter: "
+             << (mbGeometrySparseFlowTrackingFilterEnabled
+                     ? "enabled" : "disabled") << endl;
+        if(mbGeometrySparseFlowTrackingFilterEnabled)
+        {
+            cout << "- G1-F1 q threshold: "
+                 << mfGeometrySparseFlowTrackingFilterQ << endl;
+            cout << "- G1-F1 maximum association removal fraction: "
+                 << mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction
+                 << endl;
+            cout << "- G1-F1 minimum remaining associations: "
+                 << mnGeometrySparseFlowTrackingFilterMinimumAssociations
+                 << endl;
+            cout << "- G1-F1 minimum scale support: "
+                 << mnGeometrySparseFlowTrackingFilterMinimumScaleSupport
+                 << endl;
+            cout << "- G1-F1 output: "
+                 << mGeometrySparseFlowTrackingFilterCsvPath << endl;
+            cout << "- G1-F1 scope: TrackLocalMap associations only; "
+                 << "pose_reoptimization=none; mapping_veto=none"
+                 << endl;
+        }
+        cout << "- G1-M0 MapPoint admission counterfactual: "
+             << (mbGeometrySparseFlowMappingCounterfactualEnabled
+                     ? "enabled" : "disabled") << endl;
+        if(mbGeometrySparseFlowMappingCounterfactualEnabled)
+        {
+            cout << "- G1-M0 output: "
+                 << mGeometrySparseFlowMappingCounterfactualCsvPath
+                 << endl;
+            cout << "- G1-M0 scope: read-only initialization/"
+                 << "CreateNewKeyFrame audit; mapping_veto=none"
+                 << endl;
+        }
+        cout << "- G1-M1 sparse-flow MapPoint admission filter: "
+             << (mbGeometrySparseFlowMappingFilterEnabled
+                     ? "enabled" : "disabled") << endl;
+        if(mbGeometrySparseFlowMappingFilterEnabled)
+        {
+            cout << "- G1-M1 maximum candidate feature fraction: "
+                 << mfGeometrySparseFlowMappingFilterMaximumFeatureFraction
+                 << endl;
+            cout << "- G1-M1 maximum candidate depth fraction: "
+                 << mfGeometrySparseFlowMappingFilterMaximumDepthFraction
+                 << endl;
+            cout << "- G1-M1 minimum remaining depth features: "
+                 << mnGeometrySparseFlowMappingFilterMinimumRemainingDepthFeatures
+                 << endl;
+            cout << "- G1-M1 output: "
+                 << mGeometrySparseFlowMappingFilterCsvPath
+                 << endl;
+            cout << "- G1-M1 scope: existing mvbDynamic/"
+                 << "MapPoint admission path; pose_reoptimization=none"
+                 << endl;
+        }
+        cout << "- G1 sparse-map quality audit: "
+             << (mbGeometrySparseFlowMapQualityAuditEnabled
+                     ? "enabled" : "disabled") << endl;
+        if(mbGeometrySparseFlowMapQualityAuditEnabled)
+        {
+            cout << "- map-quality output prefix: "
+                 << mGeometrySparseFlowMapQualityPrefix << endl;
+            cout << "- map-quality scope: read-only candidate "
+                 << "MapPoint lifecycle/final-map summary" << endl;
         }
         cout << "- G2-1 multi-reference evidence: "
              << (mbGeometryMultiReferenceShadowEnabled ?
@@ -1717,6 +2169,482 @@ void Tracking::SaveGeometryPoseDiagnostics()
         }
     }
 
+    if(!mGeometryAssociationSnapshotCsvPath.empty() &&
+       !mvGeometryAssociationSnapshotDiagnostics.empty())
+    {
+        ofstream stream(
+            mGeometryAssociationSnapshotCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G1-F0B] failed to open association "
+                 << "snapshot CSV: "
+                 << mGeometryAssociationSnapshotCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,stage,feature_index,"
+                << "has_mappoint,mappoint_bad,mappoint_observations,"
+                << "current_frame_outlier,semantic_nonzero,"
+                << "only_tracking,within_relocalization_window,"
+                << "counted_tracking_inlier,tracking_inliers,"
+                << "counterfactual_only,dynamic_decision,"
+                << "direct_slam_state_mutation,pose_reoptimization\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometryAssociationSnapshotDiagnostics.size();
+                ++index)
+            {
+                const GeometryAssociationSnapshotRecord &record =
+                    mvGeometryAssociationSnapshotDiagnostics[index];
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.stage << ","
+                       << record.featureIndex << ","
+                       << (record.hasMapPoint ? 1 : 0) << ","
+                       << (record.mapPointBad ? 1 : 0) << ","
+                       << record.mapPointObservations << ","
+                       << (record.currentFrameOutlier ? 1 : 0)
+                       << ","
+                       << (record.semanticNonzero ? 1 : 0) << ","
+                       << (record.onlyTracking ? 1 : 0) << ","
+                       << (record.withinRelocalizationWindow
+                               ? 1 : 0)
+                       << ","
+                       << (record.countedTrackingInlier
+                               ? 1 : 0)
+                       << ","
+                       << record.trackingInliers
+                       << ",true,none,none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G1-F0B] saved "
+                 << mvGeometryAssociationSnapshotDiagnostics.size()
+                 << " raw association snapshot rows to "
+                 << mGeometryAssociationSnapshotCsvPath << endl;
+        }
+    }
+
+    if(!mGeometrySparseFlowTrackingFilterCsvPath.empty() &&
+       !mvGeometrySparseFlowTrackingFilterDiagnostics.empty())
+    {
+        ofstream stream(
+            mGeometrySparseFlowTrackingFilterCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G1-F1] failed to open tracking "
+                 << "filter CSV: "
+                 << mGeometrySparseFlowTrackingFilterCsvPath
+                 << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,q_threshold,scale_valid,"
+                << "frame_scale_px,scale_support,"
+                << "quality_eligible_features,candidate_features,"
+                << "baseline_associations,candidate_associations,"
+                << "removed_associations,remaining_associations,"
+                << "candidate_association_fraction,"
+                << "within_relocalization_window,applied,state,"
+                << "pose_reoptimization,mapping_veto\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometrySparseFlowTrackingFilterDiagnostics.
+                        size(); ++index)
+            {
+                const GeometrySparseFlowTrackingFilterRecord &record =
+                    mvGeometrySparseFlowTrackingFilterDiagnostics[
+                        index];
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.qThreshold << ","
+                       << (record.scaleValid ? 1 : 0) << ","
+                       << record.frameScalePixels << ","
+                       << record.scaleSupport << ","
+                       << record.qualityEligibleFeatures << ","
+                       << record.candidateFeatures << ","
+                       << record.baselineAssociations << ","
+                       << record.candidateAssociations << ","
+                       << record.removedAssociations << ","
+                       << record.remainingAssociations << ","
+                       << record.candidateAssociationFraction << ","
+                       << (record.withinRelocalizationWindow
+                               ? 1 : 0)
+                       << ","
+                       << (record.applied ? 1 : 0) << ","
+                       << record.state
+                       << ",none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G1-F1] saved "
+                 << mvGeometrySparseFlowTrackingFilterDiagnostics.
+                        size()
+                 << " tracking-filter frame rows to "
+                 << mGeometrySparseFlowTrackingFilterCsvPath
+                 << endl;
+        }
+    }
+
+    if(!mGeometrySparseFlowMappingCounterfactualCsvPath.empty() &&
+       !mvGeometrySparseFlowMappingAdmissionDiagnostics.empty())
+    {
+        ofstream stream(
+            mGeometrySparseFlowMappingCounterfactualCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G1-M0] failed to open mapping "
+                 << "counterfactual CSV: "
+                 << mGeometrySparseFlowMappingCounterfactualCsvPath
+                 << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,stage,q_threshold,scale_valid,"
+                << "candidate_vector_valid,candidate_state,"
+                << "feature_count,candidate_features,"
+                << "candidate_associations_before_mapping,"
+                << "candidate_tracking_removals,"
+                << "valid_depth_features,"
+                << "candidate_valid_depth_features,"
+                << "depth_admission_features,"
+                << "candidate_depth_admission_features,"
+                << "created_mappoints,"
+                << "candidate_created_mappoints,"
+                << "recreated_after_tracking_removal,"
+                << "counterfactual_only,"
+                << "direct_mapping_state_mutation,mapping_veto\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometrySparseFlowMappingAdmissionDiagnostics.
+                        size(); ++index)
+            {
+                const GeometrySparseFlowMappingAdmissionRecord &record =
+                    mvGeometrySparseFlowMappingAdmissionDiagnostics[
+                        index];
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.stage << ","
+                       << record.qThreshold << ","
+                       << (record.scaleValid ? 1 : 0) << ","
+                       << (record.candidateVectorValid ? 1 : 0)
+                       << ","
+                       << record.candidateState << ","
+                       << record.featureCount << ","
+                       << record.candidateFeatures << ","
+                       << record.
+                              candidateAssociationsBeforeMapping
+                       << ","
+                       << record.candidateTrackingRemovals << ","
+                       << record.validDepthFeatures << ","
+                       << record.candidateValidDepthFeatures << ","
+                       << record.depthAdmissionFeatures << ","
+                       << record.
+                              candidateDepthAdmissionFeatures
+                       << ","
+                       << record.createdMapPoints << ","
+                       << record.candidateCreatedMapPoints << ","
+                       << record.recreatedAfterTrackingRemoval
+                       << ",true,none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G1-M0] saved "
+                 << mvGeometrySparseFlowMappingAdmissionDiagnostics.
+                        size()
+                 << " mapping-admission rows to "
+                 << mGeometrySparseFlowMappingCounterfactualCsvPath
+                 << endl;
+        }
+    }
+
+    if(!mGeometrySparseFlowMappingFilterCsvPath.empty() &&
+       !mvGeometrySparseFlowMappingFilterDiagnostics.empty())
+    {
+        ofstream stream(
+            mGeometrySparseFlowMappingFilterCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G1-M1] failed to open mapping "
+                 << "filter CSV: "
+                 << mGeometrySparseFlowMappingFilterCsvPath
+                 << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,stage,q_threshold,scale_valid,"
+                << "candidate_vector_valid,"
+                << "tracking_safeguards_passed,"
+                << "tracking_safeguard_state,"
+                << "feature_count,available_features,"
+                << "candidate_features,candidate_feature_fraction,"
+                << "valid_depth_features,"
+                << "candidate_valid_depth_features,"
+                << "candidate_depth_fraction,"
+                << "maximum_feature_fraction,"
+                << "maximum_depth_fraction,"
+                << "minimum_remaining_depth_features,"
+                << "remaining_valid_depth_features,"
+                << "candidate_associations_before_veto,"
+                << "candidate_tracking_removals,"
+                << "new_dynamic_flags,removed_associations,"
+                << "vetoed_depth_features,created_mappoints,"
+                << "candidate_created_mappoints,applied,state,"
+                << "mapping_filter,pose_reoptimization\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometrySparseFlowMappingFilterDiagnostics.
+                        size(); ++index)
+            {
+                const GeometrySparseFlowMappingFilterRecord &record =
+                    mvGeometrySparseFlowMappingFilterDiagnostics[
+                        index];
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.stage << ","
+                       << record.qThreshold << ","
+                       << (record.scaleValid ? 1 : 0) << ","
+                       << (record.candidateVectorValid ? 1 : 0)
+                       << ","
+                       << (record.trackingSafeguardsPassed
+                               ? 1 : 0)
+                       << ","
+                       << record.trackingSafeguardState << ","
+                       << record.featureCount << ","
+                       << record.availableFeatures << ","
+                       << record.candidateFeatures << ","
+                       << record.candidateFeatureFraction << ","
+                       << record.validDepthFeatures << ","
+                       << record.candidateValidDepthFeatures
+                       << ","
+                       << record.candidateDepthFraction << ","
+                       << record.maximumFeatureFraction << ","
+                       << record.maximumDepthFraction << ","
+                       << record.minimumRemainingDepthFeatures
+                       << ","
+                       << record.remainingValidDepthFeatures << ","
+                       << record.candidateAssociationsBeforeVeto
+                       << ","
+                       << record.candidateTrackingRemovals << ","
+                       << record.newDynamicFlags << ","
+                       << record.removedAssociations << ","
+                       << record.vetoedDepthFeatures << ","
+                       << record.createdMapPoints << ","
+                       << record.candidateCreatedMapPoints << ","
+                       << (record.applied ? 1 : 0) << ","
+                       << record.state
+                       << ",mvbDynamic,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G1-M1] saved "
+                 << mvGeometrySparseFlowMappingFilterDiagnostics.
+                        size()
+                 << " mapping-filter rows to "
+                 << mGeometrySparseFlowMappingFilterCsvPath
+                 << endl;
+        }
+    }
+
+    if(mbGeometrySparseFlowMapQualityAuditEnabled &&
+       !mGeometrySparseFlowMapQualityPrefix.empty())
+    {
+        const std::string lifecyclePath =
+            mGeometrySparseFlowMapQualityPrefix+
+            "_candidate_lifecycle.csv";
+        const std::string summaryPath =
+            mGeometrySparseFlowMapQualityPrefix+
+            "_summary.csv";
+        const vector<MapPoint*> finalMapPoints =
+            mpMap->GetAllMapPoints();
+        const vector<KeyFrame*> finalKeyFrames =
+            mpMap->GetAllKeyFrames();
+        const std::set<MapPoint*> finalMapPointSet(
+            finalMapPoints.begin(),finalMapPoints.end());
+
+        std::vector<int> finalObservationCounts;
+        finalObservationCounts.reserve(finalMapPoints.size());
+        std::size_t finalObservationTotal = 0;
+        for(std::size_t index=0;
+            index<finalMapPoints.size(); ++index)
+        {
+            const int observations =
+                finalMapPoints[index]->Observations();
+            finalObservationCounts.push_back(observations);
+            if(observations>0)
+            {
+                finalObservationTotal +=
+                    static_cast<std::size_t>(observations);
+            }
+        }
+        std::sort(finalObservationCounts.begin(),
+                  finalObservationCounts.end());
+        double medianObservations = 0.0;
+        if(!finalObservationCounts.empty())
+        {
+            const std::size_t middle =
+                finalObservationCounts.size()/2;
+            medianObservations =
+                finalObservationCounts.size()%2!=0
+                ? static_cast<double>(
+                      finalObservationCounts[middle])
+                : 0.5*static_cast<double>(
+                      finalObservationCounts[middle-1]+
+                      finalObservationCounts[middle]);
+        }
+        const double meanObservations =
+            finalMapPoints.empty()
+            ? 0.0
+            : static_cast<double>(finalObservationTotal)/
+                static_cast<double>(finalMapPoints.size());
+
+        std::size_t originalSurvivors = 0;
+        std::size_t resolvedSurvivors = 0;
+        std::size_t replacementSurvivors = 0;
+        ofstream lifecycleStream(lifecyclePath.c_str());
+        if(!lifecycleStream.is_open())
+        {
+            cerr << "[Geometry Map Quality] failed to open "
+                 << lifecyclePath << endl;
+        }
+        else
+        {
+            lifecycleStream
+                << "frame,timestamp,feature_index,pixel_x,pixel_y,"
+                << "depth_m,mode,mapping_state,original_mappoint_id,"
+                << "original_in_final_map,original_bad,"
+                << "original_observations,replacement_depth,"
+                << "resolved_mappoint_id,resolved_in_final_map,"
+                << "resolved_bad,resolved_observations,"
+                << "proxy_survived\n";
+            lifecycleStream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<mvGeometrySparseFlowCandidateMapPoints.size();
+                ++index)
+            {
+                const GeometrySparseFlowCandidateMapPointRecord &record =
+                    mvGeometrySparseFlowCandidateMapPoints[index];
+                MapPoint *original = record.originalMapPoint;
+                const bool originalInFinal =
+                    original &&
+                    finalMapPointSet.count(original)>0;
+                const bool originalBad =
+                    !original || original->isBad();
+                const int originalObservations =
+                    original ? original->Observations() : 0;
+
+                MapPoint *resolved = original;
+                std::set<MapPoint*> replacementChain;
+                std::size_t replacementDepth = 0;
+                while(resolved && replacementDepth<32 &&
+                      replacementChain.insert(resolved).second)
+                {
+                    MapPoint *replacement =
+                        resolved->GetReplaced();
+                    if(!replacement)
+                        break;
+                    resolved = replacement;
+                    ++replacementDepth;
+                }
+                const bool resolvedInFinal =
+                    resolved &&
+                    finalMapPointSet.count(resolved)>0;
+                const bool resolvedBad =
+                    !resolved || resolved->isBad();
+                const int resolvedObservations =
+                    resolved ? resolved->Observations() : 0;
+                const bool proxySurvived =
+                    resolvedInFinal && !resolvedBad;
+                if(originalInFinal && !originalBad)
+                    ++originalSurvivors;
+                if(proxySurvived)
+                    ++resolvedSurvivors;
+                if(proxySurvived && replacementDepth>0)
+                    ++replacementSurvivors;
+
+                lifecycleStream
+                    << record.frameId << ","
+                    << record.timestamp << ","
+                    << record.featureIndex << ","
+                    << record.pixelX << ","
+                    << record.pixelY << ","
+                    << record.depthMeters << ","
+                    << record.mode << ","
+                    << record.mappingState << ","
+                    << record.originalMapPointId << ","
+                    << (originalInFinal ? 1 : 0) << ","
+                    << (originalBad ? 1 : 0) << ","
+                    << originalObservations << ","
+                    << replacementDepth << ","
+                    << (resolved ? resolved->mnId : 0) << ","
+                    << (resolvedInFinal ? 1 : 0) << ","
+                    << (resolvedBad ? 1 : 0) << ","
+                    << resolvedObservations << ","
+                    << (proxySurvived ? 1 : 0) << "\n";
+            }
+            lifecycleStream.close();
+        }
+
+        ofstream summaryStream(summaryPath.c_str());
+        if(!summaryStream.is_open())
+        {
+            cerr << "[Geometry Map Quality] failed to open "
+                 << summaryPath << endl;
+        }
+        else
+        {
+            const std::size_t candidateCreated =
+                mvGeometrySparseFlowCandidateMapPoints.size();
+            const std::size_t candidateCulled =
+                candidateCreated>=resolvedSurvivors
+                ? candidateCreated-resolvedSurvivors : 0;
+            const double survivorRatio =
+                candidateCreated>0
+                ? static_cast<double>(resolvedSurvivors)/
+                    static_cast<double>(candidateCreated)
+                : 0.0;
+            summaryStream
+                << "mode,final_mappoints,final_keyframes,"
+                << "final_observation_total,mean_observations,"
+                << "median_observations,candidate_created,"
+                << "candidate_original_survivors,"
+                << "candidate_resolved_survivors,"
+                << "candidate_replacement_survivors,"
+                << "candidate_culled_or_not_surviving,"
+                << "candidate_proxy_survival_ratio,"
+                << "read_only,direct_map_mutation\n";
+            summaryStream << std::setprecision(15)
+                << (mbGeometrySparseFlowMappingCounterfactualEnabled
+                        ? "g1_m0_counterfactual"
+                        : "g1_m1_filter") << ","
+                << finalMapPoints.size() << ","
+                << finalKeyFrames.size() << ","
+                << finalObservationTotal << ","
+                << meanObservations << ","
+                << medianObservations << ","
+                << candidateCreated << ","
+                << originalSurvivors << ","
+                << resolvedSurvivors << ","
+                << replacementSurvivors << ","
+                << candidateCulled << ","
+                << survivorRatio
+                << ",true,none\n";
+            summaryStream.close();
+            cout << "[Geometry Map Quality] final_mappoints="
+                 << finalMapPoints.size()
+                 << " final_keyframes=" << finalKeyFrames.size()
+                 << " candidate_created=" << candidateCreated
+                 << " candidate_survived=" << resolvedSurvivors
+                 << " candidate_survival_ratio=" << survivorRatio
+                 << " read_only=true direct_map_mutation=none"
+                 << endl;
+        }
+    }
+
     if(!mGeometryLocalRigidityCsvPath.empty() &&
        !mvGeometryLocalRigidityNodeDiagnostics.empty())
     {
@@ -2351,6 +3279,11 @@ void Tracking::SaveGeometryPoseDiagnostics()
     mvGeometryMultiReferenceFeatureDiagnostics.clear();
     mvGeometrySparseFlowFeatureDiagnostics.clear();
     mvGeometrySparseFlowFrameDiagnostics.clear();
+    mvGeometryAssociationSnapshotDiagnostics.clear();
+    mvGeometrySparseFlowTrackingFilterDiagnostics.clear();
+    mvGeometrySparseFlowMappingAdmissionDiagnostics.clear();
+    mvGeometrySparseFlowMappingFilterDiagnostics.clear();
+    mvGeometrySparseFlowCandidateMapPoints.clear();
     mvGeometryRegionEvidenceDiagnostics.clear();
     mvGeometryReferenceSelectionDiagnostics.clear();
     mvJiGeometryClusterDiagnostics.clear();
@@ -2565,6 +3498,15 @@ int Tracking::RemoveDynamicAssociations(Frame &frame)
 
 void Tracking::RunSparseEgoFlowShadow()
 {
+    mCurrentSparseFlowFilterResult =
+        GeometricSparseFlowFilterResult();
+    mCurrentSparseFlowFilterResult.candidateMask.assign(
+        static_cast<std::size_t>(mCurrentFrame.N),0);
+    mvbCurrentSparseFlowRemovedAssociations.assign(
+        static_cast<std::size_t>(mCurrentFrame.N),0);
+    mbCurrentSparseFlowTrackingSafeguardsPassed = false;
+    mCurrentSparseFlowTrackingSafeguardState =
+        "not_evaluated";
     if(!mbGeometrySparseEgoFlowShadowEnabled ||
        mSensor!=System::RGBD ||
        mCurrentFrame.mTcw.empty())
@@ -2635,6 +3577,18 @@ void Tracking::RunSparseEgoFlowShadow()
                 : GeometricSparseFlowEvidenceState::
                     ReferenceUnavailable;
         }
+    }
+
+    if(mbGeometrySparseFlowTrackingFilterEnabled)
+    {
+        mCurrentSparseFlowFilterResult =
+            GeometricDynamicDetector::
+                SelectSparseFlowHighResidualCandidates(
+                    result,mCurrentFrame.mvbSemanticDynamic,
+                    mfGeometrySparseFlowTrackingFilterQ,
+                    0.25f,
+                    mnGeometrySparseFlowTrackingFilterMinimumScaleSupport,
+                    1.4826f,0.001f);
     }
 
     GeometricRigidityResult rigidityResult;
@@ -2887,6 +3841,246 @@ void Tracking::RunSparseEgoFlowShadow()
                  << " direct_slam_state_mutation=none"
                  << endl;
         }
+    }
+}
+
+int Tracking::ApplySparseFlowTrackingFilter()
+{
+    if(!mbGeometrySparseFlowTrackingFilterEnabled)
+        return 0;
+
+    GeometrySparseFlowTrackingFilterRecord record;
+    record.frameId = mCurrentFrame.mnId;
+    record.timestamp = mCurrentFrame.mTimeStamp;
+    record.qThreshold = mfGeometrySparseFlowTrackingFilterQ;
+    record.scaleValid =
+        mCurrentSparseFlowFilterResult.scaleValid;
+    record.frameScalePixels =
+        mCurrentSparseFlowFilterResult.frameScalePixels;
+    record.scaleSupport =
+        mCurrentSparseFlowFilterResult.scaleSupport;
+    record.qualityEligibleFeatures =
+        mCurrentSparseFlowFilterResult.
+            qualityEligibleFeatureCount;
+    record.candidateFeatures =
+        mCurrentSparseFlowFilterResult.candidateFeatureCount;
+    record.baselineAssociations = 0;
+    record.candidateAssociations = 0;
+    record.removedAssociations = 0;
+    record.remainingAssociations = 0;
+    record.candidateAssociationFraction = 0.0;
+    record.withinRelocalizationWindow =
+        mCurrentFrame.mnId<
+            mnLastRelocFrameId+
+                static_cast<long unsigned int>(mMaxFrames);
+    record.applied = false;
+    record.state = "unknown";
+
+    const std::size_t count =
+        static_cast<std::size_t>(mCurrentFrame.N);
+    const bool vectorSizesValid =
+        mCurrentFrame.mvpMapPoints.size()==count &&
+        mCurrentFrame.mvbOutlier.size()==count &&
+        mCurrentSparseFlowFilterResult.
+            candidateMask.size()==count;
+    if(!vectorSizesValid)
+    {
+        record.state = "vector_size_mismatch_fail_open";
+        mbCurrentSparseFlowTrackingSafeguardsPassed = false;
+        mCurrentSparseFlowTrackingSafeguardState =
+            record.state;
+        mvGeometrySparseFlowTrackingFilterDiagnostics.
+            push_back(record);
+        return 0;
+    }
+
+    for(std::size_t index=0; index<count; ++index)
+    {
+        MapPoint *mapPoint =
+            mCurrentFrame.mvpMapPoints[index];
+        if(!mapPoint || mapPoint->isBad())
+            continue;
+        ++record.baselineAssociations;
+        if(mCurrentSparseFlowFilterResult.
+               candidateMask[index]!=0)
+        {
+            ++record.candidateAssociations;
+        }
+    }
+    record.remainingAssociations =
+        record.baselineAssociations;
+    if(record.baselineAssociations>0)
+    {
+        record.candidateAssociationFraction =
+            static_cast<double>(
+                record.candidateAssociations)/
+            static_cast<double>(
+                record.baselineAssociations);
+    }
+
+    if(!record.scaleValid)
+        record.state = "scale_invalid_fail_open";
+    else if(record.withinRelocalizationWindow)
+        record.state = "relocalization_window_fail_open";
+    else if(record.baselineAssociations<
+            mnGeometrySparseFlowTrackingFilterMinimumAssociations)
+        record.state = "insufficient_associations_fail_open";
+    else if(record.candidateAssociations==0)
+        record.state = "no_candidate_association";
+    else if(record.candidateAssociationFraction>
+            mfGeometrySparseFlowTrackingFilterMaximumAssociationFraction)
+        record.state = "maximum_fraction_fail_open";
+    else if(record.baselineAssociations-
+                record.candidateAssociations<
+            mnGeometrySparseFlowTrackingFilterMinimumAssociations)
+        record.state = "minimum_remaining_fail_open";
+    else
+    {
+        for(std::size_t index=0; index<count; ++index)
+        {
+            if(mCurrentSparseFlowFilterResult.
+                   candidateMask[index]==0)
+            {
+                continue;
+            }
+            MapPoint *mapPoint =
+                mCurrentFrame.mvpMapPoints[index];
+            if(!mapPoint || mapPoint->isBad())
+                continue;
+            mCurrentFrame.mvpMapPoints[index] =
+                static_cast<MapPoint*>(NULL);
+            mCurrentFrame.mvbOutlier[index] = false;
+            mvbCurrentSparseFlowRemovedAssociations[index] = 1;
+            ++record.removedAssociations;
+        }
+        record.remainingAssociations =
+            record.baselineAssociations-
+            record.removedAssociations;
+        record.applied = record.removedAssociations>0;
+        record.state =
+            record.applied ? "applied" :
+                "no_candidate_association";
+    }
+
+    mbCurrentSparseFlowTrackingSafeguardsPassed =
+        record.state=="applied" ||
+        record.state=="no_candidate_association";
+    mCurrentSparseFlowTrackingSafeguardState =
+        record.state;
+    mvGeometrySparseFlowTrackingFilterDiagnostics.
+        push_back(record);
+    if(record.applied ||
+       mCurrentFrame.mnId%
+           static_cast<long unsigned int>(
+               mnGeometryLogEveryN)==0)
+    {
+        cout << "[Geometry G1-F1] frame="
+             << record.frameId
+             << " q=" << record.qThreshold
+             << " scale=" << record.frameScalePixels
+             << " support=" << record.scaleSupport
+             << " candidate_features="
+             << record.candidateFeatures
+             << " baseline_assoc="
+             << record.baselineAssociations
+             << " candidate_assoc="
+             << record.candidateAssociations
+             << " removed="
+             << record.removedAssociations
+             << " remaining="
+             << record.remainingAssociations
+             << " state=" << record.state
+             << " pose_reoptimization=none"
+             << " mapping_veto=none"
+             << endl;
+    }
+    return record.removedAssociations;
+}
+
+void Tracking::RecordSparseFlowAssociationSnapshot(
+    const std::string &stage,
+    const int trackingInliers,
+    const std::vector<unsigned char> &countedTrackingInliers)
+{
+    if(!mbGeometrySparseFlowCounterfactualShadowEnabled ||
+       mGeometryAssociationSnapshotCsvPath.empty() ||
+       (!mGeometrySparseFlowFrameFilter.empty() &&
+        mGeometrySparseFlowFrameFilter.count(
+            mCurrentFrame.mnId)==0))
+    {
+        return;
+    }
+    if(stage!="post_search_pre_pose" &&
+       stage!="post_existing_pose")
+    {
+        throw std::invalid_argument(
+            "unsupported sparse-flow association snapshot stage");
+    }
+    if((stage=="post_search_pre_pose" &&
+        (trackingInliers!=-1 ||
+         !countedTrackingInliers.empty())) ||
+       (stage=="post_existing_pose" &&
+        (trackingInliers<0 ||
+         countedTrackingInliers.size()!=
+             static_cast<std::size_t>(
+                 mCurrentFrame.N))))
+    {
+        throw std::invalid_argument(
+            "association snapshot tracking-inlier state is invalid");
+    }
+    if(stage=="post_existing_pose")
+    {
+        const int counted = std::accumulate(
+            countedTrackingInliers.begin(),
+            countedTrackingInliers.end(),0);
+        if(counted!=trackingInliers)
+        {
+            throw std::logic_error(
+                "association snapshot inlier mask/count mismatch");
+        }
+    }
+
+    const std::size_t count =
+        static_cast<std::size_t>(mCurrentFrame.N);
+    if(mCurrentFrame.mvpMapPoints.size()!=count ||
+       mCurrentFrame.mvbOutlier.size()!=count ||
+       mCurrentFrame.mvbSemanticDynamic.size()!=count)
+    {
+        throw std::logic_error(
+            "Frame feature association vectors must match Frame::N");
+    }
+
+    const bool withinRelocalizationWindow =
+        mCurrentFrame.mnId<
+            mnLastRelocFrameId+
+                static_cast<long unsigned int>(mMaxFrames);
+    for(std::size_t index=0; index<count; ++index)
+    {
+        MapPoint *mapPoint =
+            mCurrentFrame.mvpMapPoints[index];
+        GeometryAssociationSnapshotRecord record;
+        record.frameId = mCurrentFrame.mnId;
+        record.timestamp = mCurrentFrame.mTimeStamp;
+        record.stage = stage;
+        record.featureIndex = index;
+        record.hasMapPoint = mapPoint!=NULL;
+        record.mapPointBad =
+            mapPoint ? mapPoint->isBad() : false;
+        record.mapPointObservations =
+            mapPoint ? mapPoint->Observations() : 0;
+        record.currentFrameOutlier =
+            mCurrentFrame.mvbOutlier[index];
+        record.semanticNonzero =
+            mCurrentFrame.mvbSemanticDynamic[index]!=0;
+        record.onlyTracking = mbOnlyTracking;
+        record.withinRelocalizationWindow =
+            withinRelocalizationWindow;
+        record.countedTrackingInlier =
+            stage=="post_existing_pose" &&
+            countedTrackingInliers[index]!=0;
+        record.trackingInliers = trackingInliers;
+        mvGeometryAssociationSnapshotDiagnostics.push_back(
+            record);
     }
 }
 
@@ -4776,12 +5970,84 @@ void Tracking::StereoInitialization()
         // Insert KeyFrame in the map
         mpMap->AddKeyFrame(pKFini);
 
+        GeometrySparseFlowMappingAdmissionRecord mappingRecord;
+        const bool recordMappingAdmission =
+            mbGeometrySparseFlowMappingCounterfactualEnabled;
+        if(recordMappingAdmission)
+        {
+            mappingRecord.frameId = mCurrentFrame.mnId;
+            mappingRecord.timestamp = mCurrentFrame.mTimeStamp;
+            mappingRecord.stage = "stereo_initialization";
+            mappingRecord.qThreshold =
+                mfGeometrySparseFlowTrackingFilterQ;
+            mappingRecord.scaleValid = false;
+            mappingRecord.candidateVectorValid = false;
+            mappingRecord.candidateState =
+                "reference_unavailable";
+            mappingRecord.featureCount =
+                static_cast<std::size_t>(mCurrentFrame.N);
+            mappingRecord.candidateFeatures = 0;
+            mappingRecord.candidateAssociationsBeforeMapping = 0;
+            mappingRecord.candidateTrackingRemovals = 0;
+            mappingRecord.validDepthFeatures = 0;
+            mappingRecord.candidateValidDepthFeatures = 0;
+            mappingRecord.depthAdmissionFeatures = 0;
+            mappingRecord.candidateDepthAdmissionFeatures = 0;
+            mappingRecord.createdMapPoints = 0;
+            mappingRecord.candidateCreatedMapPoints = 0;
+            mappingRecord.recreatedAfterTrackingRemoval = 0;
+        }
+
+        GeometrySparseFlowMappingFilterRecord mappingFilterRecord =
+            GeometrySparseFlowMappingFilterRecord();
+        const bool recordMappingFilter =
+            mbGeometrySparseFlowMappingFilterEnabled;
+        if(recordMappingFilter)
+        {
+            mappingFilterRecord.frameId = mCurrentFrame.mnId;
+            mappingFilterRecord.timestamp =
+                mCurrentFrame.mTimeStamp;
+            mappingFilterRecord.stage =
+                "stereo_initialization";
+            mappingFilterRecord.qThreshold =
+                mfGeometrySparseFlowTrackingFilterQ;
+            mappingFilterRecord.scaleValid = false;
+            mappingFilterRecord.candidateVectorValid = false;
+            mappingFilterRecord.trackingSafeguardsPassed =
+                false;
+            mappingFilterRecord.trackingSafeguardState =
+                "reference_unavailable";
+            mappingFilterRecord.featureCount =
+                static_cast<std::size_t>(mCurrentFrame.N);
+            mappingFilterRecord.availableFeatures =
+                static_cast<std::size_t>(nStaticFeatures);
+            mappingFilterRecord.maximumFeatureFraction =
+                mfGeometrySparseFlowMappingFilterMaximumFeatureFraction;
+            mappingFilterRecord.maximumDepthFraction =
+                mfGeometrySparseFlowMappingFilterMaximumDepthFraction;
+            mappingFilterRecord.minimumRemainingDepthFeatures =
+                mnGeometrySparseFlowMappingFilterMinimumRemainingDepthFeatures;
+            mappingFilterRecord.state =
+                "reference_unavailable_fail_open";
+        }
+
         // Create MapPoints and asscoiate to KeyFrame
         for(int i=0; i<mCurrentFrame.N;i++)
         {
             float z = mCurrentFrame.mvDepth[i];
             if(z>0 && !mCurrentFrame.mvbDynamic[i])
             {
+                if(recordMappingAdmission)
+                {
+                    ++mappingRecord.validDepthFeatures;
+                    ++mappingRecord.depthAdmissionFeatures;
+                }
+                if(recordMappingFilter)
+                {
+                    ++mappingFilterRecord.validDepthFeatures;
+                    ++mappingFilterRecord.
+                        remainingValidDepthFeatures;
+                }
                 cv::Mat x3D = mCurrentFrame.UnprojectStereo(i);
                 MapPoint* pNewMP = new MapPoint(x3D,pKFini,mpMap);
                 pNewMP->AddObservation(pKFini,i);
@@ -4791,7 +6057,21 @@ void Tracking::StereoInitialization()
                 mpMap->AddMapPoint(pNewMP);
 
                 mCurrentFrame.mvpMapPoints[i]=pNewMP;
+                if(recordMappingAdmission)
+                    ++mappingRecord.createdMapPoints;
+                if(recordMappingFilter)
+                    ++mappingFilterRecord.createdMapPoints;
             }
+        }
+        if(recordMappingAdmission)
+        {
+            mvGeometrySparseFlowMappingAdmissionDiagnostics.
+                push_back(mappingRecord);
+        }
+        if(recordMappingFilter)
+        {
+            mvGeometrySparseFlowMappingFilterDiagnostics.
+                push_back(mappingFilterRecord);
         }
 
         cout << "New map created with " << mpMap->MapPointsInMap() << " points" << endl;
@@ -5204,10 +6484,15 @@ bool Tracking::TrackLocalMap()
     SearchLocalPoints();
 
     RemoveDynamicAssociations(mCurrentFrame);
+    ApplySparseFlowTrackingFilter();
+    RecordSparseFlowAssociationSnapshot(
+        "post_search_pre_pose");
 
     // Optimize Pose
     Optimizer::PoseOptimization(&mCurrentFrame);
     mnMatchesInliers = 0;
+    std::vector<unsigned char> countedTrackingInliers(
+        static_cast<std::size_t>(mCurrentFrame.N),0);
 
     // Update MapPoints Statistics
     for(int i=0; i<mCurrentFrame.N; i++)
@@ -5220,16 +6505,27 @@ bool Tracking::TrackLocalMap()
                 if(!mbOnlyTracking)
                 {
                     if(mCurrentFrame.mvpMapPoints[i]->Observations()>0)
+                    {
                         mnMatchesInliers++;
+                        countedTrackingInliers[
+                            static_cast<std::size_t>(i)] = 1;
+                    }
                 }
                 else
+                {
                     mnMatchesInliers++;
+                    countedTrackingInliers[
+                        static_cast<std::size_t>(i)] = 1;
+                }
             }
             else if(mSensor==System::STEREO)
                 mCurrentFrame.mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
 
         }
     }
+    RecordSparseFlowAssociationSnapshot(
+        "post_existing_pose",mnMatchesInliers,
+        countedTrackingInliers);
 
     // Decide if the tracking was succesful
     // More restrictive if there was a relocalization recently
@@ -5335,7 +6631,258 @@ void Tracking::CreateNewKeyFrame()
     if(!mpLocalMapper->SetNotStop(true))
         return;
 
+    GeometrySparseFlowMappingAdmissionRecord mappingRecord;
+    const bool recordMappingAdmission =
+        mbGeometrySparseFlowMappingCounterfactualEnabled;
+    bool candidateVectorValid = false;
+    if(recordMappingAdmission)
+    {
+        mappingRecord.frameId = mCurrentFrame.mnId;
+        mappingRecord.timestamp = mCurrentFrame.mTimeStamp;
+        mappingRecord.stage = "create_new_keyframe";
+        mappingRecord.qThreshold =
+            mfGeometrySparseFlowTrackingFilterQ;
+        mappingRecord.scaleValid =
+            mCurrentSparseFlowFilterResult.scaleValid;
+        mappingRecord.featureCount =
+            static_cast<std::size_t>(mCurrentFrame.N);
+        candidateVectorValid =
+            mCurrentSparseFlowFilterResult.candidateMask.size()==
+                mappingRecord.featureCount &&
+            mvbCurrentSparseFlowRemovedAssociations.size()==
+                mappingRecord.featureCount &&
+            mCurrentFrame.mvpMapPoints.size()==
+                mappingRecord.featureCount;
+        mappingRecord.candidateVectorValid =
+            candidateVectorValid;
+        mappingRecord.candidateState =
+            !mappingRecord.scaleValid
+                ? "scale_invalid"
+                : (candidateVectorValid
+                    ? "measured" : "vector_size_mismatch");
+        mappingRecord.candidateFeatures = 0;
+        mappingRecord.candidateAssociationsBeforeMapping = 0;
+        mappingRecord.candidateTrackingRemovals = 0;
+        mappingRecord.validDepthFeatures = 0;
+        mappingRecord.candidateValidDepthFeatures = 0;
+        mappingRecord.depthAdmissionFeatures = 0;
+        mappingRecord.candidateDepthAdmissionFeatures = 0;
+        mappingRecord.createdMapPoints = 0;
+        mappingRecord.candidateCreatedMapPoints = 0;
+        mappingRecord.recreatedAfterTrackingRemoval = 0;
+
+        if(candidateVectorValid)
+        {
+            for(std::size_t index=0;
+                index<mappingRecord.featureCount; ++index)
+            {
+                if(mCurrentSparseFlowFilterResult.
+                       candidateMask[index]==0)
+                {
+                    continue;
+                }
+                ++mappingRecord.candidateFeatures;
+                MapPoint *mapPoint =
+                    mCurrentFrame.mvpMapPoints[index];
+                if(mapPoint && !mapPoint->isBad())
+                {
+                    ++mappingRecord.
+                        candidateAssociationsBeforeMapping;
+                }
+                if(mvbCurrentSparseFlowRemovedAssociations[
+                       index]!=0)
+                {
+                    ++mappingRecord.candidateTrackingRemovals;
+                }
+            }
+        }
+    }
+
+    GeometrySparseFlowMappingFilterRecord mappingFilterRecord =
+        GeometrySparseFlowMappingFilterRecord();
+    const bool applyMappingFilter =
+        mbGeometrySparseFlowMappingFilterEnabled;
+    bool mappingFilterCandidateVectorValid = false;
+    if(applyMappingFilter)
+    {
+        mappingFilterRecord.frameId = mCurrentFrame.mnId;
+        mappingFilterRecord.timestamp =
+            mCurrentFrame.mTimeStamp;
+        mappingFilterRecord.stage = "create_new_keyframe";
+        mappingFilterRecord.qThreshold =
+            mfGeometrySparseFlowTrackingFilterQ;
+        mappingFilterRecord.scaleValid =
+            mCurrentSparseFlowFilterResult.scaleValid;
+        mappingFilterRecord.trackingSafeguardsPassed =
+            mbCurrentSparseFlowTrackingSafeguardsPassed;
+        mappingFilterRecord.trackingSafeguardState =
+            mCurrentSparseFlowTrackingSafeguardState;
+        mappingFilterRecord.featureCount =
+            static_cast<std::size_t>(mCurrentFrame.N);
+        mappingFilterRecord.maximumFeatureFraction =
+            mfGeometrySparseFlowMappingFilterMaximumFeatureFraction;
+        mappingFilterRecord.maximumDepthFraction =
+            mfGeometrySparseFlowMappingFilterMaximumDepthFraction;
+        mappingFilterRecord.minimumRemainingDepthFeatures =
+            mnGeometrySparseFlowMappingFilterMinimumRemainingDepthFeatures;
+
+        mappingFilterCandidateVectorValid =
+            mCurrentSparseFlowFilterResult.candidateMask.size()==
+                mappingFilterRecord.featureCount &&
+            mvbCurrentSparseFlowRemovedAssociations.size()==
+                mappingFilterRecord.featureCount &&
+            mCurrentFrame.mvpMapPoints.size()==
+                mappingFilterRecord.featureCount &&
+            mCurrentFrame.mvbOutlier.size()==
+                mappingFilterRecord.featureCount &&
+            mCurrentFrame.mvbDynamic.size()==
+                mappingFilterRecord.featureCount &&
+            mCurrentFrame.mvDepth.size()==
+                mappingFilterRecord.featureCount;
+        mappingFilterRecord.candidateVectorValid =
+            mappingFilterCandidateVectorValid;
+
+        if(mappingFilterCandidateVectorValid)
+        {
+            for(std::size_t index=0;
+                index<mappingFilterRecord.featureCount; ++index)
+            {
+                const bool currentlyDynamic =
+                    mCurrentFrame.mvbDynamic[index]!=0;
+                if(!currentlyDynamic)
+                    ++mappingFilterRecord.availableFeatures;
+
+                const bool candidate =
+                    mCurrentSparseFlowFilterResult.
+                        candidateMask[index]!=0 &&
+                    !currentlyDynamic;
+                if(candidate)
+                {
+                    ++mappingFilterRecord.candidateFeatures;
+                    if(mCurrentFrame.mvpMapPoints[index])
+                    {
+                        ++mappingFilterRecord.
+                            candidateAssociationsBeforeVeto;
+                    }
+                    if(mvbCurrentSparseFlowRemovedAssociations[
+                           index]!=0)
+                    {
+                        ++mappingFilterRecord.
+                            candidateTrackingRemovals;
+                    }
+                }
+
+                const bool validDepth =
+                    mCurrentFrame.mvDepth[index]>0.0f &&
+                    !currentlyDynamic;
+                if(validDepth)
+                {
+                    ++mappingFilterRecord.validDepthFeatures;
+                    if(candidate)
+                    {
+                        ++mappingFilterRecord.
+                            candidateValidDepthFeatures;
+                    }
+                }
+            }
+        }
+
+        if(mappingFilterRecord.availableFeatures>0)
+        {
+            mappingFilterRecord.candidateFeatureFraction =
+                static_cast<double>(
+                    mappingFilterRecord.candidateFeatures)/
+                static_cast<double>(
+                    mappingFilterRecord.availableFeatures);
+        }
+        if(mappingFilterRecord.validDepthFeatures>0)
+        {
+            mappingFilterRecord.candidateDepthFraction =
+                static_cast<double>(
+                    mappingFilterRecord.
+                        candidateValidDepthFeatures)/
+                static_cast<double>(
+                    mappingFilterRecord.validDepthFeatures);
+        }
+        const std::size_t prospectiveRemainingValidDepth =
+            mappingFilterRecord.validDepthFeatures>=
+                mappingFilterRecord.candidateValidDepthFeatures
+            ? mappingFilterRecord.validDepthFeatures-
+                mappingFilterRecord.candidateValidDepthFeatures
+            : 0;
+        mappingFilterRecord.remainingValidDepthFeatures =
+            mappingFilterRecord.validDepthFeatures;
+
+        if(!mappingFilterCandidateVectorValid)
+        {
+            mappingFilterRecord.state =
+                "vector_size_mismatch_fail_open";
+        }
+        else if(!mappingFilterRecord.scaleValid)
+        {
+            mappingFilterRecord.state =
+                "scale_invalid_fail_open";
+        }
+        else if(!mappingFilterRecord.trackingSafeguardsPassed)
+        {
+            mappingFilterRecord.state =
+                "tracking_safeguard_fail_open";
+        }
+        else if(mappingFilterRecord.candidateFeatures==0)
+        {
+            mappingFilterRecord.state = "no_candidates";
+        }
+        else if(mappingFilterRecord.candidateFeatureFraction>
+                mappingFilterRecord.maximumFeatureFraction)
+        {
+            mappingFilterRecord.state =
+                "maximum_feature_fraction_fail_open";
+        }
+        else if(mappingFilterRecord.candidateDepthFraction>
+                mappingFilterRecord.maximumDepthFraction)
+        {
+            mappingFilterRecord.state =
+                "maximum_depth_fraction_fail_open";
+        }
+        else if(prospectiveRemainingValidDepth<
+                mappingFilterRecord.
+                    minimumRemainingDepthFeatures)
+        {
+            mappingFilterRecord.state =
+                "minimum_remaining_depth_fail_open";
+        }
+        else
+        {
+            for(std::size_t index=0;
+                index<mappingFilterRecord.featureCount; ++index)
+            {
+                if(mCurrentSparseFlowFilterResult.
+                       candidateMask[index]==0 ||
+                   mCurrentFrame.mvbDynamic[index]!=0)
+                {
+                    continue;
+                }
+                mCurrentFrame.mvbDynamic[index] = 1;
+                ++mappingFilterRecord.newDynamicFlags;
+                if(mCurrentFrame.mvDepth[index]>0.0f)
+                    ++mappingFilterRecord.vetoedDepthFeatures;
+            }
+            mappingFilterRecord.applied =
+                mappingFilterRecord.newDynamicFlags>0;
+            mappingFilterRecord.remainingValidDepthFeatures =
+                prospectiveRemainingValidDepth;
+            mappingFilterRecord.state =
+                mappingFilterRecord.applied
+                    ? "applied" : "no_candidates";
+        }
+    }
+
     RemoveDynamicAssociations(mCurrentFrame);
+    if(applyMappingFilter && mappingFilterRecord.applied)
+    {
+        mappingFilterRecord.removedAssociations =
+            mappingFilterRecord.candidateAssociationsBeforeVeto;
+    }
 
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpMap,mpKeyFrameDB);
 
@@ -5356,6 +6903,18 @@ void Tracking::CreateNewKeyFrame()
             float z = mCurrentFrame.mvDepth[i];
             if(z>0 && !mCurrentFrame.mvbDynamic[i])
             {
+                if(recordMappingAdmission)
+                {
+                    ++mappingRecord.validDepthFeatures;
+                    if(candidateVectorValid &&
+                       mCurrentSparseFlowFilterResult.
+                           candidateMask[
+                               static_cast<std::size_t>(i)]!=0)
+                    {
+                        ++mappingRecord.
+                            candidateValidDepthFeatures;
+                    }
+                }
                 vDepthIdx.push_back(make_pair(z,i));
             }
         }
@@ -5368,6 +6927,31 @@ void Tracking::CreateNewKeyFrame()
             for(size_t j=0; j<vDepthIdx.size();j++)
             {
                 int i = vDepthIdx[j].second;
+                const std::size_t featureIndex =
+                    static_cast<std::size_t>(i);
+                const bool geometryCandidate =
+                    recordMappingAdmission &&
+                    candidateVectorValid &&
+                    mCurrentSparseFlowFilterResult.
+                        candidateMask[featureIndex]!=0;
+                const bool removedByTracking =
+                    geometryCandidate &&
+                    mvbCurrentSparseFlowRemovedAssociations[
+                        featureIndex]!=0;
+                const bool mappingFilterCandidate =
+                    applyMappingFilter &&
+                    mappingFilterCandidateVectorValid &&
+                    mCurrentSparseFlowFilterResult.
+                        candidateMask[featureIndex]!=0;
+                if(recordMappingAdmission)
+                {
+                    ++mappingRecord.depthAdmissionFeatures;
+                    if(geometryCandidate)
+                    {
+                        ++mappingRecord.
+                            candidateDepthAdmissionFeatures;
+                    }
+                }
 
                 bool bCreateNew = false;
 
@@ -5382,6 +6966,23 @@ void Tracking::CreateNewKeyFrame()
 
                 if(bCreateNew)
                 {
+                    if(recordMappingAdmission &&
+                       geometryCandidate)
+                    {
+                        ++mappingRecord.
+                            candidateCreatedMapPoints;
+                        if(removedByTracking)
+                        {
+                            ++mappingRecord.
+                                recreatedAfterTrackingRemoval;
+                        }
+                    }
+                    if(applyMappingFilter &&
+                       mappingFilterCandidate)
+                    {
+                        ++mappingFilterRecord.
+                            candidateCreatedMapPoints;
+                    }
                     cv::Mat x3D = mCurrentFrame.UnprojectStereo(i);
                     MapPoint* pNewMP = new MapPoint(x3D,pKF,mpMap);
                     pNewMP->AddObservation(pKF,i);
@@ -5390,8 +6991,46 @@ void Tracking::CreateNewKeyFrame()
                     pNewMP->UpdateNormalAndDepth();
                     mpMap->AddMapPoint(pNewMP);
 
+                    if(mbGeometrySparseFlowMapQualityAuditEnabled &&
+                       (geometryCandidate ||
+                        mappingFilterCandidate))
+                    {
+                        GeometrySparseFlowCandidateMapPointRecord
+                            lifecycleRecord;
+                        lifecycleRecord.frameId =
+                            mCurrentFrame.mnId;
+                        lifecycleRecord.timestamp =
+                            mCurrentFrame.mTimeStamp;
+                        lifecycleRecord.featureIndex =
+                            featureIndex;
+                        lifecycleRecord.pixelX =
+                            mCurrentFrame.mvKeys[i].pt.x;
+                        lifecycleRecord.pixelY =
+                            mCurrentFrame.mvKeys[i].pt.y;
+                        lifecycleRecord.depthMeters =
+                            mCurrentFrame.mvDepth[i];
+                        lifecycleRecord.mode =
+                            recordMappingAdmission
+                                ? "g1_m0_counterfactual"
+                                : "g1_m1_fail_open";
+                        lifecycleRecord.mappingState =
+                            recordMappingAdmission
+                                ? "counterfactual_no_veto"
+                                : mappingFilterRecord.state;
+                        lifecycleRecord.originalMapPointId =
+                            pNewMP->mnId;
+                        lifecycleRecord.originalMapPoint =
+                            pNewMP;
+                        mvGeometrySparseFlowCandidateMapPoints.
+                            push_back(lifecycleRecord);
+                    }
+
                     mCurrentFrame.mvpMapPoints[i]=pNewMP;
                     nPoints++;
+                    if(recordMappingAdmission)
+                        ++mappingRecord.createdMapPoints;
+                    if(applyMappingFilter)
+                        ++mappingFilterRecord.createdMapPoints;
                 }
                 else
                 {
@@ -5402,6 +7041,61 @@ void Tracking::CreateNewKeyFrame()
                     break;
             }
         }
+    }
+
+    if(recordMappingAdmission)
+    {
+        mvGeometrySparseFlowMappingAdmissionDiagnostics.
+            push_back(mappingRecord);
+        cout << "[Geometry G1-M0] frame="
+             << mappingRecord.frameId
+             << " state=" << mappingRecord.candidateState
+             << " candidates="
+             << mappingRecord.candidateFeatures
+             << " candidate_assoc="
+             << mappingRecord.
+                    candidateAssociationsBeforeMapping
+             << " tracking_removed="
+             << mappingRecord.candidateTrackingRemovals
+             << " created=" << mappingRecord.createdMapPoints
+             << " candidate_created="
+             << mappingRecord.candidateCreatedMapPoints
+             << " recreated_after_tracking="
+             << mappingRecord.
+                    recreatedAfterTrackingRemoval
+             << " counterfactual_only=true"
+             << " mapping_veto=none"
+             << endl;
+    }
+    if(applyMappingFilter)
+    {
+        mvGeometrySparseFlowMappingFilterDiagnostics.
+            push_back(mappingFilterRecord);
+        cout << "[Geometry G1-M1] frame="
+             << mappingFilterRecord.frameId
+             << " state=" << mappingFilterRecord.state
+             << " tracking_state="
+             << mappingFilterRecord.trackingSafeguardState
+             << " candidates="
+             << mappingFilterRecord.candidateFeatures
+             << " candidate_feature_fraction="
+             << mappingFilterRecord.candidateFeatureFraction
+             << " candidate_depth="
+             << mappingFilterRecord.candidateValidDepthFeatures
+             << " candidate_depth_fraction="
+             << mappingFilterRecord.candidateDepthFraction
+             << " new_dynamic_flags="
+             << mappingFilterRecord.newDynamicFlags
+             << " vetoed_depth="
+             << mappingFilterRecord.vetoedDepthFeatures
+             << " created="
+             << mappingFilterRecord.createdMapPoints
+             << " candidate_created="
+             << mappingFilterRecord.candidateCreatedMapPoints
+             << " mapping_filter_applied="
+             << (mappingFilterRecord.applied ? "true" : "false")
+             << " pose_reoptimization=none"
+             << endl;
     }
 
     mpLocalMapper->InsertKeyFrame(pKF);
@@ -5823,6 +7517,17 @@ void Tracking::Reset()
     mvGeometryMultiReferenceFeatureDiagnostics.clear();
     mvGeometrySparseFlowFeatureDiagnostics.clear();
     mvGeometrySparseFlowFrameDiagnostics.clear();
+    mvGeometryAssociationSnapshotDiagnostics.clear();
+    mvGeometrySparseFlowTrackingFilterDiagnostics.clear();
+    mvGeometrySparseFlowMappingAdmissionDiagnostics.clear();
+    mvGeometrySparseFlowMappingFilterDiagnostics.clear();
+    mvGeometrySparseFlowCandidateMapPoints.clear();
+    mCurrentSparseFlowFilterResult =
+        GeometricSparseFlowFilterResult();
+    mvbCurrentSparseFlowRemovedAssociations.clear();
+    mbCurrentSparseFlowTrackingSafeguardsPassed = false;
+    mCurrentSparseFlowTrackingSafeguardState =
+        "not_evaluated";
     mvGeometryLocalRigidityNodeDiagnostics.clear();
     mvGeometryLocalRigidityEdgeDiagnostics.clear();
     mvGeometryLocalRigidityFrameDiagnostics.clear();

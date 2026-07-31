@@ -1,0 +1,805 @@
+{
+  "files": [
+    {
+      "applied_frames": 139,
+      "baseline_associations": 466402,
+      "candidate_associations": 360,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_fr1_xyz/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 331,
+      "removed_fraction_of_baseline": 0.0007096882088841814,
+      "rows": 791,
+      "states": {
+        "applied": 139,
+        "no_candidate_association": 623,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 299,
+      "baseline_associations": 463834,
+      "candidate_associations": 989,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_fr1_xyz/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 957,
+      "removed_fraction_of_baseline": 0.0020632381412315614,
+      "rows": 791,
+      "states": {
+        "applied": 299,
+        "no_candidate_association": 463,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 167,
+      "baseline_associations": 451161,
+      "candidate_associations": 453,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_fr1_xyz/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 423,
+      "removed_fraction_of_baseline": 0.0009375810409144407,
+      "rows": 791,
+      "states": {
+        "applied": 167,
+        "no_candidate_association": 595,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 68,
+      "baseline_associations": 343529,
+      "candidate_associations": 285,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 214,
+      "removed_fraction_of_baseline": 0.000622945952161244,
+      "rows": 675,
+      "states": {
+        "applied": 68,
+        "maximum_fraction_fail_open": 2,
+        "no_candidate_association": 546,
+        "relocalization_window_fail_open": 58,
+        "scale_invalid_fail_open": 1
+      }
+    },
+    {
+      "applied_frames": 221,
+      "baseline_associations": 454245,
+      "candidate_associations": 3327,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 1481,
+      "removed_fraction_of_baseline": 0.0032603550947176083,
+      "rows": 826,
+      "states": {
+        "applied": 221,
+        "maximum_fraction_fail_open": 37,
+        "no_candidate_association": 539,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 124,
+      "baseline_associations": 442260,
+      "candidate_associations": 1247,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 742,
+      "removed_fraction_of_baseline": 0.0016777461221905666,
+      "rows": 826,
+      "states": {
+        "applied": 124,
+        "maximum_fraction_fail_open": 12,
+        "no_candidate_association": 661,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 106,
+      "baseline_associations": 411785,
+      "candidate_associations": 1006,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/trial2/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 636,
+      "removed_fraction_of_baseline": 0.0015444953070170113,
+      "rows": 802,
+      "states": {
+        "applied": 106,
+        "maximum_fraction_fail_open": 8,
+        "no_candidate_association": 629,
+        "relocalization_window_fail_open": 58,
+        "scale_invalid_fail_open": 1
+      }
+    },
+    {
+      "applied_frames": 111,
+      "baseline_associations": 284667,
+      "candidate_associations": 865,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/trial2/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 476,
+      "removed_fraction_of_baseline": 0.0016721291895442744,
+      "rows": 564,
+      "states": {
+        "applied": 111,
+        "maximum_fraction_fail_open": 9,
+        "no_candidate_association": 415,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 139,
+      "baseline_associations": 451303,
+      "candidate_associations": 1267,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/trial2/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 837,
+      "removed_fraction_of_baseline": 0.0018546298163318214,
+      "rows": 826,
+      "states": {
+        "applied": 139,
+        "maximum_fraction_fail_open": 9,
+        "no_candidate_association": 649,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 61,
+      "baseline_associations": 350652,
+      "candidate_associations": 442,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/trial3/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 286,
+      "removed_fraction_of_baseline": 0.0008156234671412113,
+      "rows": 680,
+      "states": {
+        "applied": 61,
+        "maximum_fraction_fail_open": 3,
+        "no_candidate_association": 573,
+        "relocalization_window_fail_open": 41,
+        "scale_invalid_fail_open": 2
+      }
+    },
+    {
+      "applied_frames": 221,
+      "baseline_associations": 455727,
+      "candidate_associations": 3236,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/trial3/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 1421,
+      "removed_fraction_of_baseline": 0.003118094824313679,
+      "rows": 826,
+      "states": {
+        "applied": 221,
+        "maximum_fraction_fail_open": 36,
+        "no_candidate_association": 540,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 125,
+      "baseline_associations": 450967,
+      "candidate_associations": 1953,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_geometry_walking/trial3/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 703,
+      "removed_fraction_of_baseline": 0.0015588723786884627,
+      "rows": 826,
+      "states": {
+        "applied": 125,
+        "maximum_fraction_fail_open": 25,
+        "no_candidate_association": 647,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 105,
+      "baseline_associations": 193007,
+      "candidate_associations": 293,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial1/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 285,
+      "removed_fraction_of_baseline": 0.001476630381281508,
+      "rows": 437,
+      "states": {
+        "applied": 105,
+        "no_candidate_association": 303,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 186,
+      "baseline_associations": 191444,
+      "candidate_associations": 1015,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial1/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 965,
+      "removed_fraction_of_baseline": 0.005040638515701719,
+      "rows": 437,
+      "states": {
+        "applied": 186,
+        "no_candidate_association": 222,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 140,
+      "baseline_associations": 192526,
+      "candidate_associations": 497,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial1/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 464,
+      "removed_fraction_of_baseline": 0.002410064095239085,
+      "rows": 437,
+      "states": {
+        "applied": 140,
+        "maximum_fraction_fail_open": 1,
+        "no_candidate_association": 267,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 110,
+      "baseline_associations": 198358,
+      "candidate_associations": 306,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial2/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 301,
+      "removed_fraction_of_baseline": 0.0015174583329132176,
+      "rows": 437,
+      "states": {
+        "applied": 110,
+        "no_candidate_association": 298,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 186,
+      "baseline_associations": 192441,
+      "candidate_associations": 944,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial2/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 894,
+      "removed_fraction_of_baseline": 0.0046455796841629385,
+      "rows": 437,
+      "states": {
+        "applied": 186,
+        "no_candidate_association": 222,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 172,
+      "baseline_associations": 195329,
+      "candidate_associations": 539,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial2/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 526,
+      "removed_fraction_of_baseline": 0.002692892504441225,
+      "rows": 437,
+      "states": {
+        "applied": 172,
+        "no_candidate_association": 236,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 101,
+      "baseline_associations": 197178,
+      "candidate_associations": 285,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial3/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 281,
+      "removed_fraction_of_baseline": 0.0014251082777997546,
+      "rows": 437,
+      "states": {
+        "applied": 101,
+        "no_candidate_association": 307,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 198,
+      "baseline_associations": 195351,
+      "candidate_associations": 1048,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial3/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 859,
+      "removed_fraction_of_baseline": 0.004397213221329812,
+      "rows": 437,
+      "states": {
+        "applied": 198,
+        "maximum_fraction_fail_open": 5,
+        "no_candidate_association": 205,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 157,
+      "baseline_associations": 189031,
+      "candidate_associations": 510,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_bonn_balloon/trial3/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 498,
+      "removed_fraction_of_baseline": 0.0026344885230464845,
+      "rows": 437,
+      "states": {
+        "applied": 157,
+        "no_candidate_association": 251,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 16,
+      "baseline_associations": 182080,
+      "candidate_associations": 22,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial1/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 21,
+      "removed_fraction_of_baseline": 0.00011533391915641476,
+      "rows": 679,
+      "states": {
+        "applied": 16,
+        "no_candidate_association": 634,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 61,
+      "baseline_associations": 183753,
+      "candidate_associations": 120,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial1/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 113,
+      "removed_fraction_of_baseline": 0.0006149559462974754,
+      "rows": 679,
+      "states": {
+        "applied": 61,
+        "no_candidate_association": 589,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 29,
+      "baseline_associations": 178621,
+      "candidate_associations": 45,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial1/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 44,
+      "removed_fraction_of_baseline": 0.00024633161834274807,
+      "rows": 679,
+      "states": {
+        "applied": 29,
+        "no_candidate_association": 621,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 15,
+      "baseline_associations": 182083,
+      "candidate_associations": 20,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial2/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 19,
+      "removed_fraction_of_baseline": 0.0001043480171130748,
+      "rows": 679,
+      "states": {
+        "applied": 15,
+        "no_candidate_association": 635,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 54,
+      "baseline_associations": 183332,
+      "candidate_associations": 111,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial2/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 106,
+      "removed_fraction_of_baseline": 0.0005781860231710776,
+      "rows": 679,
+      "states": {
+        "applied": 54,
+        "no_candidate_association": 596,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 29,
+      "baseline_associations": 179602,
+      "candidate_associations": 40,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial2/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 39,
+      "removed_fraction_of_baseline": 0.00021714680237413836,
+      "rows": 679,
+      "states": {
+        "applied": 29,
+        "no_candidate_association": 621,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 19,
+      "baseline_associations": 181094,
+      "candidate_associations": 29,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial3/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 28,
+      "removed_fraction_of_baseline": 0.00015461583487028836,
+      "rows": 679,
+      "states": {
+        "applied": 19,
+        "no_candidate_association": 631,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 63,
+      "baseline_associations": 185231,
+      "candidate_associations": 162,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial3/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 158,
+      "removed_fraction_of_baseline": 0.0008529889705286912,
+      "rows": 679,
+      "states": {
+        "applied": 63,
+        "no_candidate_association": 587,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 30,
+      "baseline_associations": 182812,
+      "candidate_associations": 44,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_sitting/trial3/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 41,
+      "removed_fraction_of_baseline": 0.00022427411767280046,
+      "rows": 679,
+      "states": {
+        "applied": 30,
+        "no_candidate_association": 620,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 196,
+      "baseline_associations": 271423,
+      "candidate_associations": 572,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial1/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 555,
+      "removed_fraction_of_baseline": 0.0020447788138809164,
+      "rows": 826,
+      "states": {
+        "applied": 196,
+        "no_candidate_association": 601,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 399,
+      "baseline_associations": 262623,
+      "candidate_associations": 1630,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial1/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 1498,
+      "removed_fraction_of_baseline": 0.0057039939380785385,
+      "rows": 826,
+      "states": {
+        "applied": 399,
+        "maximum_fraction_fail_open": 5,
+        "no_candidate_association": 393,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 294,
+      "baseline_associations": 274267,
+      "candidate_associations": 1099,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial1/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 1054,
+      "removed_fraction_of_baseline": 0.00384297053601053,
+      "rows": 826,
+      "states": {
+        "applied": 294,
+        "maximum_fraction_fail_open": 1,
+        "no_candidate_association": 502,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 210,
+      "baseline_associations": 268727,
+      "candidate_associations": 619,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial2/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 611,
+      "removed_fraction_of_baseline": 0.0022736829570530687,
+      "rows": 826,
+      "states": {
+        "applied": 210,
+        "no_candidate_association": 587,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 399,
+      "baseline_associations": 263107,
+      "candidate_associations": 1671,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial2/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 1522,
+      "removed_fraction_of_baseline": 0.005784718764609075,
+      "rows": 826,
+      "states": {
+        "applied": 399,
+        "maximum_fraction_fail_open": 5,
+        "no_candidate_association": 393,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 279,
+      "baseline_associations": 264198,
+      "candidate_associations": 937,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial2/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 898,
+      "removed_fraction_of_baseline": 0.003398965927069849,
+      "rows": 826,
+      "states": {
+        "applied": 279,
+        "maximum_fraction_fail_open": 1,
+        "no_candidate_association": 517,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 199,
+      "baseline_associations": 267363,
+      "candidate_associations": 546,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial3/q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 537,
+      "removed_fraction_of_baseline": 0.002008505290560025,
+      "rows": 826,
+      "states": {
+        "applied": 199,
+        "no_candidate_association": 598,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 392,
+      "baseline_associations": 261977,
+      "candidate_associations": 1623,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial3/q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 1493,
+      "removed_fraction_of_baseline": 0.00569897357401604,
+      "rows": 826,
+      "states": {
+        "applied": 392,
+        "maximum_fraction_fail_open": 5,
+        "no_candidate_association": 400,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 279,
+      "baseline_associations": 250425,
+      "candidate_associations": 899,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/formal_semantic_geometry_walking/trial3/q8/filter.csv",
+      "q_values": [
+        8.0
+      ],
+      "removed_associations": 847,
+      "removed_fraction_of_baseline": 0.003382250174703005,
+      "rows": 826,
+      "states": {
+        "applied": 279,
+        "maximum_fraction_fail_open": 1,
+        "no_candidate_association": 517,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 3,
+      "baseline_associations": 33166,
+      "candidate_associations": 6,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/smoke_q10/filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 4,
+      "removed_fraction_of_baseline": 0.00012060543930531267,
+      "rows": 78,
+      "states": {
+        "applied": 3,
+        "no_candidate_association": 46,
+        "relocalization_window_fail_open": 29
+      }
+    },
+    {
+      "applied_frames": 20,
+      "baseline_associations": 64517,
+      "candidate_associations": 129,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_f1_2026-07-31/viewer_q6/filter.csv",
+      "q_values": [
+        6.0
+      ],
+      "removed_associations": 67,
+      "removed_fraction_of_baseline": 0.001038485980439264,
+      "rows": 148,
+      "states": {
+        "applied": 20,
+        "maximum_fraction_fail_open": 1,
+        "no_candidate_association": 98,
+        "relocalization_window_fail_open": 29
+      }
+    }
+  ],
+  "passed": true
+}

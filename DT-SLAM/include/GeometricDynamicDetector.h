@@ -247,6 +247,19 @@ struct GeometricSparseFlowResult
     GeometricSparseFlowStats stats;
 };
 
+// G1-F1 conservative high-residual feature candidates. This result contains
+// no MapPoint or SLAM-state mutation; Tracking applies independent fail-open
+// association safeguards before using it.
+struct GeometricSparseFlowFilterResult
+{
+    std::vector<unsigned char> candidateMask;
+    bool scaleValid = false;
+    float frameScalePixels = 0.0f;
+    std::size_t scaleSupport = 0;
+    std::size_t qualityEligibleFeatureCount = 0;
+    std::size_t candidateFeatureCount = 0;
+};
+
 enum class GeometricRigidityNodeState
 {
     Measured,
@@ -540,6 +553,16 @@ public:
         const cv::Mat &TcwGroundTruthCurrent = cv::Mat(),
         const float depthBoundaryRelativeThreshold = 0.025f,
         const float depthBoundaryAbsoluteThresholdMeters = 0.08f);
+
+    static GeometricSparseFlowFilterResult
+        SelectSparseFlowHighResidualCandidates(
+            const GeometricSparseFlowResult &sparseFlow,
+            const std::vector<unsigned char> &semanticDynamic,
+            const float qThreshold,
+            const float maximumForwardBackwardErrorPixels = 0.25f,
+            const std::size_t minimumScaleSupport = 20,
+            const float scaleFactor = 1.4826f,
+            const float scaleFloorPixels = 0.001f);
 
     static const char *SparseFlowEvidenceStateName(
         const GeometricSparseFlowEvidenceState state);

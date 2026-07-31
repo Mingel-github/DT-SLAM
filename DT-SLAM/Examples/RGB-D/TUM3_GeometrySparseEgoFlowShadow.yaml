@@ -33,6 +33,17 @@ Geometry.Enable: 1
 Geometry.SingleReferenceShadowEnable: 0
 Geometry.MultiReferenceShadowEnable: 0
 Geometry.SparseEgoFlowShadowEnable: 1
+Geometry.SparseFlowTrackingFilterEnable: 0
+Geometry.SparseFlowTrackingFilterQ: 10.0
+Geometry.SparseFlowTrackingFilterMaximumAssociationFraction: 0.05
+Geometry.SparseFlowTrackingFilterMinimumAssociations: 30
+Geometry.SparseFlowTrackingFilterMinimumScaleSupport: 20
+Geometry.SparseFlowMappingCounterfactualEnable: 0
+Geometry.SparseFlowMappingFilterEnable: 0
+Geometry.SparseFlowMappingFilterMaximumFeatureFraction: 0.05
+Geometry.SparseFlowMappingFilterMaximumDepthFraction: 0.05
+Geometry.SparseFlowMappingFilterMinimumRemainingDepthFeatures: 100
+Geometry.SparseFlowMapQualityAuditEnable: 0
 Geometry.LocalRigidityShadowEnable: 0
 Geometry.LogEveryN: 30
 Geometry.ResidualThresholdM: 0.10

@@ -1,0 +1,205 @@
+{
+  "files": [
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_bonn_balloon/trial1/mapping.csv",
+      "rows": 48,
+      "stages": {
+        "create_new_keyframe": 47,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 0,
+        "candidate_created_fraction": 0.018216250338172965,
+        "candidate_created_mappoints": 202,
+        "candidate_features": 238,
+        "candidate_tracking_removals": 31,
+        "created_mappoints": 11089,
+        "recreated_after_tracking_removal": 28,
+        "recreated_fraction_of_candidate_created": 0.13861386138613863
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_bonn_balloon/trial2/mapping.csv",
+      "rows": 50,
+      "stages": {
+        "create_new_keyframe": 49,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 0,
+        "candidate_created_fraction": 0.017140982530960386,
+        "candidate_created_mappoints": 209,
+        "candidate_features": 255,
+        "candidate_tracking_removals": 28,
+        "created_mappoints": 12193,
+        "recreated_after_tracking_removal": 25,
+        "recreated_fraction_of_candidate_created": 0.11961722488038277
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_bonn_balloon/trial3/mapping.csv",
+      "rows": 51,
+      "stages": {
+        "create_new_keyframe": 50,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 0,
+        "candidate_created_fraction": 0.01008249312557287,
+        "candidate_created_mappoints": 121,
+        "candidate_features": 170,
+        "candidate_tracking_removals": 20,
+        "created_mappoints": 12001,
+        "recreated_after_tracking_removal": 16,
+        "recreated_fraction_of_candidate_created": 0.1322314049586777
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_sitting/trial1/mapping.csv",
+      "rows": 16,
+      "stages": {
+        "create_new_keyframe": 15,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 0,
+        "candidate_created_fraction": 0.0009151921903599756,
+        "candidate_created_mappoints": 3,
+        "candidate_features": 3,
+        "candidate_tracking_removals": 0,
+        "created_mappoints": 3278,
+        "recreated_after_tracking_removal": 0,
+        "recreated_fraction_of_candidate_created": 0.0
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_sitting/trial2/mapping.csv",
+      "rows": 14,
+      "stages": {
+        "create_new_keyframe": 13,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 0,
+        "candidate_created_fraction": 0.0025089605734767025,
+        "candidate_created_mappoints": 7,
+        "candidate_features": 7,
+        "candidate_tracking_removals": 1,
+        "created_mappoints": 2790,
+        "recreated_after_tracking_removal": 1,
+        "recreated_fraction_of_candidate_created": 0.14285714285714285
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_sitting/trial3/mapping.csv",
+      "rows": 18,
+      "stages": {
+        "create_new_keyframe": 17,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 0,
+        "candidate_created_fraction": 0.00029171528588098014,
+        "candidate_created_mappoints": 1,
+        "candidate_features": 1,
+        "candidate_tracking_removals": 0,
+        "created_mappoints": 3428,
+        "recreated_after_tracking_removal": 0,
+        "recreated_fraction_of_candidate_created": 0.0
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_walking/trial1/mapping.csv",
+      "rows": 254,
+      "stages": {
+        "create_new_keyframe": 253,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 2,
+        "candidate_created_fraction": 0.02411315502388745,
+        "candidate_created_mappoints": 641,
+        "candidate_features": 835,
+        "candidate_tracking_removals": 136,
+        "created_mappoints": 26583,
+        "recreated_after_tracking_removal": 106,
+        "recreated_fraction_of_candidate_created": 0.16536661466458658
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_walking/trial2/mapping.csv",
+      "rows": 251,
+      "stages": {
+        "create_new_keyframe": 250,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 1,
+        "candidate_created_fraction": 0.023954482858592446,
+        "candidate_created_mappoints": 661,
+        "candidate_features": 816,
+        "candidate_tracking_removals": 160,
+        "created_mappoints": 27594,
+        "recreated_after_tracking_removal": 141,
+        "recreated_fraction_of_candidate_created": 0.21331316187594554
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/formal_walking/trial3/mapping.csv",
+      "rows": 259,
+      "stages": {
+        "create_new_keyframe": 258,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 1,
+        "candidate_created_fraction": 0.024856305431845,
+        "candidate_created_mappoints": 653,
+        "candidate_features": 848,
+        "candidate_tracking_removals": 187,
+        "created_mappoints": 26271,
+        "recreated_after_tracking_removal": 143,
+        "recreated_fraction_of_candidate_created": 0.21898928024502298
+      }
+    },
+    {
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_m0_2026-07-31/smoke_walking150/mapping.csv",
+      "rows": 77,
+      "stages": {
+        "create_new_keyframe": 76,
+        "stereo_initialization": 1
+      },
+      "totals": {
+        "candidate_associations_before_mapping": 0,
+        "candidate_created_fraction": 0.000337997701615629,
+        "candidate_created_mappoints": 5,
+        "candidate_features": 5,
+        "candidate_tracking_removals": 1,
+        "created_mappoints": 14793,
+        "recreated_after_tracking_removal": 1,
+        "recreated_fraction_of_candidate_created": 0.2
+      }
+    }
+  ],
+  "passed": true
+}
