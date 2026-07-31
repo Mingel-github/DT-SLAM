@@ -1769,3 +1769,33 @@ G1-D pixel/depth filtering           locked
 - `results/g1_map_quality_2026-07-31/G1_SPARSE_MAP_QUALITY_EVALUATION_RESULT.md`
 - `results/g1_map_quality_2026-07-31/G1_MAP_QUALITY_FORMAL_METRICS.csv`
 - `DT-SLAM/tools/audit_sparse_map_quality.py`
+
+## 28. 2026-07-31 G1 四模式首轮结果
+
+新增 `DT-SLAM/tools/run_sparse_frontend_mode.py`，用同一二进制冻结四模式运行。
+TUM3 walking 首轮显示：
+
+```text
+orb baseline        816/827, ATE 0.926133
+semantic-only       827/827, ATE 0.019142
+geometry-only       587/827, ATE 0.533014
+semantic+geometry   827/827, ATE 0.018693
+```
+
+geometry-only 和 ORB baseline 额外重复两次后仍有严重 ATE 和覆盖波动，因此纯
+几何只保留为消融诊断，不作为可用系统。semantic+geometry 完整运行，mask age
+为 0，移除 537 个 association、否决 634 个有效深度写图候选，说明组合中的
+几何路径确实生效；但 ATE 稳定改善仍无证据。
+
+下一步不得继续调 q10/5% 追逐 geometry-only walking。组合模式可默认关闭地
+用于实验；未知箱子定量结论仍需要合适的可观察数据/真值，G1-D 继续锁定。
+
+详细记录：
+
+- `results/g1_release_2026-07-31/G1_SPARSE_FRONTEND_FOUR_MODE_FREEZE_SPEC.md`
+- `results/g1_release_2026-07-31/G1_SPARSE_FRONTEND_FOUR_MODE_RESULT.md`
+- `results/g1_release_2026-07-31/G1_WALKING_FOUR_MODE_METRICS.csv`
+
+Viewer ON 组合模式完整处理 827/827 帧并达到轨迹保存阶段，随后按既有
+Viewer/Pangolin 问题返回 `-11`（shell 245）。不要把它归因于本次几何过滤，也
+不要在 G1 冻结阶段顺带修改 Viewer。

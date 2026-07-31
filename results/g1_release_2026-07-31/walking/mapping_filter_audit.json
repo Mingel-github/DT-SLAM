@@ -1,0 +1,23 @@
+{
+  "applied_rows": 148,
+  "candidate_created_mappoints": 444,
+  "candidate_features": 1430,
+  "created_mappoints": 66748,
+  "fail_open_rows": 32,
+  "files": 2,
+  "initialization_rows": 2,
+  "keyframe_rows": 652,
+  "new_dynamic_flags": 895,
+  "rows": 654,
+  "states": {
+    "applied": 148,
+    "maximum_depth_fraction_fail_open": 10,
+    "maximum_feature_fraction_fail_open": 4,
+    "no_candidates": 474,
+    "reference_unavailable_fail_open": 2,
+    "tracking_safeguard_fail_open": 16
+  },
+  "status": "PASS",
+  "vetoed_depth_features": 837,
+  "violations": []
+}

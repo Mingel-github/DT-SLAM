@@ -1,0 +1,9 @@
+mode,trial,trajectory_poses,ate_rmse_m,rpe_rmse_m_per_frame,actual_fps,tracking_applied_frames,tracking_removed_associations,mapping_applied_rows,mapping_vetoed_valid_depth
+orb_baseline,1,816,0.926133186736,0.078289708439,28.4234,0,0,0,0
+orb_baseline,2,827,0.855538793387,0.024501023825,28.5099,0,0,0,0
+orb_baseline,3,685,0.698716663135,0.061885148148,28.5189,0,0,0,0
+semantic_only,1,827,0.019142178394,0.011835962171,28.2614,0,0,0,0
+geometry_only,1,587,0.533013792410,0.096266960846,28.5063,47,240,54,203
+geometry_only,2,827,0.819300659575,0.026501630212,28.3085,,,,
+geometry_only,3,827,0.855549335370,0.026419880849,28.4197,,,,
+semantic_geometry,1,827,0.018692561542,0.012298163527,27.0829,182,537,94,634

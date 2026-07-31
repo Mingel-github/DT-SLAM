@@ -1,0 +1,45 @@
+{
+  "files": [
+    {
+      "applied_frames": 47,
+      "baseline_associations": 284338,
+      "candidate_associations": 274,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_release_2026-07-31/walking/geometry_only/tracking_filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 240,
+      "removed_fraction_of_baseline": 0.0008440658652730202,
+      "rows": 588,
+      "states": {
+        "applied": 47,
+        "maximum_fraction_fail_open": 1,
+        "no_candidate_association": 484,
+        "relocalization_window_fail_open": 55,
+        "scale_invalid_fail_open": 1
+      }
+    },
+    {
+      "applied_frames": 182,
+      "baseline_associations": 274948,
+      "candidate_associations": 549,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "results/g1_release_2026-07-31/walking/semantic_geometry/tracking_filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 537,
+      "removed_fraction_of_baseline": 0.001953096585536174,
+      "rows": 826,
+      "states": {
+        "applied": 182,
+        "no_candidate_association": 615,
+        "relocalization_window_fail_open": 29
+      }
+    }
+  ],
+  "passed": true
+}
