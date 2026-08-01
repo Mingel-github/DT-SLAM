@@ -1799,3 +1799,208 @@ geometry-only 和 ORB baseline 额外重复两次后仍有严重 ATE 和覆盖�
 Viewer ON 组合模式完整处理 827/827 帧并达到轨迹保存阶段，随后按既有
 Viewer/Pangolin 问题返回 `-11`（shell 245）。不要把它归因于本次几何过滤，也
 不要在 G1 冻结阶段顺带修改 Viewer。
+
+## 29. 2026-07-31 Bonn moving_nonobstructing_box 判别性检查完成
+
+在 Bonn 联合校正 `P=K` 域中，对 semantic-only 与 semantic+geometry 各运行
+三次，均在线 CUDA YOLO、mask age 0、轨迹 778/778。三轮中位：
+
+| 模式 | ATE | RPE | FPS |
+|---|---:|---:|---:|
+| semantic-only | 0.152247 m | 0.051377 m | 29.707 |
+| semantic+geometry | 0.178114 m | 0.045061 m | 29.544 |
+
+组合模式相对中位 ATE `+16.99%`、RPE `-12.29%`、FPS `-0.55%`。首轮 ATE
+改善没有在重复运行中成立，不能声称稳定定位收益。
+
+三轮中 G1-F1 移除 1,519 个 association，G1-M1 否决 284 个有效深度写图
+候选，所有不变量通过。为回答这些点在哪里，新增默认关闭的精确空间诊断和
+review 工具；它不改变算法。Viewer ON 完整运行导出 612 个真实移除点。复用
+24 个粗略、未验证箱框抽查时，共审查 13 个移除点，0 个在粗箱框、0 个在人物
+mask、13 个在二者之外；联系表主要显示背景位置。
+
+因此当前状态必须表述为：
+
+```text
+sparse filter implementation/action       confirmed
+safeguards and runtime cost                acceptable
+stable ATE benefit                         not supported
+unknown moving-box spatial hit             not observed in sampled proxies
+validated unknown-object detector          no
+```
+
+下一步只做一个有停止条件的 `moving_obstructing_box` 开发诊断：先看精确移除点
+是否稳定落在更强遮挡箱子附近，再决定是否值得三轮 ATE/RPE。若仍主要命中背景，
+冻结 q10 稀疏过滤为有限/负面 baseline，转回有文献依据的运动分组或对象候选；
+不得继续调 q10/5%，不得开放 G1-D。
+
+详细记录：
+
+- `results/g1_bonn_box_2026-07-31/G1_BONN_MOVING_NONOBSTRUCTING_BOX_SPEC.md`
+- `results/g1_bonn_box_2026-07-31/G1_BONN_MOVING_NONOBSTRUCTING_BOX_RESULT.md`
+- `results/g1_bonn_box_2026-07-31/G1_BONN_MOVING_NONOBSTRUCTING_BOX_METRICS.csv`
+- `DT-SLAM/tools/prepare_sparse_flow_removed_association_review.py`
+
+## 30. 2026-07-31 Bonn 箱子证据漏斗与强遮挡诊断
+
+新增默认关闭的逐特征证据审计，将现有 G1-F1 拆成：ORB、measured、quality
+eligible、冻结 q10、post-SearchLocalPoints association 和实际 removal。新增
+字段/CSV 只读，不改变候选或 SLAM。
+
+`moving_nonobstructing_box` 的 24 个粗箱框内有 4,564 个 quality-eligible
+特征，但 q10 candidate 为 0；证据在 residual 判决处消失，不是低纹理、深度
+无效或 MapPoint association 问题。
+
+`moving_obstructing_box` 完整运行 589/589、online CUDA mask age 0、29.685 FPS。
+17 个强箱体可见粗框内有 5,530 个 eligible、26 个 q10 candidate，最终有 2 个
+post-search association 且 2 个都被移除、均落在粗箱框内；这是少量正面证据。
+但 semantic-static eligible 的 q10 比率在框内仅 0.472%，框外为 5.888%，框外
+约高 12.48 倍。raw 单点 residual 明显缺少目标特异性。粗框不是 GT，因此不报
+precision/recall。
+
+决策：不降低 q、不调 5%、不做该序列三轮 ATE，不开放 G1-D。G1-F1/G1-M1
+保留为默认关闭的实验 baseline；下一方法工作转向有文献依据的空间/短时序运动
+一致性分组或对象候选，先做本地文献审计和 shadow SPEC。
+
+详细记录：
+
+- `results/g1_bonn_box_2026-07-31/G1_BONN_BOX_FEATURE_EVIDENCE_FUNNEL_SPEC.md`
+- `results/g1_bonn_box_2026-07-31/G1_BONN_BOX_FEATURE_EVIDENCE_FUNNEL_RESULT.md`
+- `results/g1_bonn_box_2026-07-31/G1_BONN_BOX_EVIDENCE_FUNNEL_AND_OBSTRUCTING_RESULT.md`
+- `DT-SLAM/tools/audit_sparse_flow_evidence_funnel.py`
+
+## 31. 2026-08-01 共同运动分组输入审计
+
+本地核对发现 7 月 30 日已完成 balloon/balloon2 的短轨迹支持审计，因此没有
+重复增加阶段。本轮补充 Lee 2019 原文核对，并在 Bonn 箱子上检查 quality-
+eligible 连续二维 ego-flow residual 是否具有共同运动结构。
+
+初版把 moving/stationary 箱框混合统计，解释作废并完整保留。修正仅连接此前
+未看 geometry/flow 时冻结的 RGB temporal proxy：非遮挡序列 5 个 moving、
+19 个 stationary 帧。moving 框内 residual magnitude、direction concentration、
+centroid separation 中位分别为 `1.682 px / 0.975 / 1.934 px`；stationary 为
+`0.235 px / 0.676 / 0.190 px`。对应描述性 proxy AUC 为
+`0.989 / 0.947 / 0.989`。
+
+5/5 moving 帧具有多点 coherence，但同一简单条件也在 10/19 stationary 帧
+触发，所以 coherence 不能直接成为动态判决。当前只允许继续设计 Lee-style
+三维 rigid-motion hypothesis shadow；不允许二维 DBSCAN、阈值选择或 G1 状态
+写入。
+
+详细记录：
+
+- `results/g2_motion_grouping_next_2026-08-01/G2_MOTION_GROUPING_LITERATURE_AND_PRIOR_EVIDENCE_AUDIT.md`
+- `results/g2_motion_grouping_next_2026-08-01/G2_BOX_TWO_FRAME_MOTION_COHERENCE_INPUT_RESULT.md`
+- `DT-SLAM/tools/audit_sparse_motion_coherence.py`
+
+## 32. 2026-08-01 G2-MH1 三维刚体假设 SPEC 冻结
+
+在输入审计确认“少量明确运动箱子帧存在多点连续运动结构，但二维 coherence
+不能排除静态表面”后，下一项没有直接实现二维 DBSCAN，而是核对 Lee 2019
+原文并冻结稀疏三维刚体假设 shadow。
+
+当前代码已经由 F1/F3 提供：两帧 LK 对应、FB 质量、参考/当前米制深度、两帧
+三维点、语义排除和背景相机相对位姿。因此下一实现应复用
+`GeometricRigidityResult::nodes`，不再写第二套光流或深度接口。
+
+冻结的第一版为：每个有效 anchor 加当前图像中最近 6 个有效点，使用标准
+SVD/Kabsch 估计 7 点刚体变换，同时比较局部模型与背景相机模型在同一点集上的
+连续三维拟合误差。它只输出 hypothesis、退化原因、局部半径、拟合质量和时间；
+不做 refinement、DBSCAN、对象标签、时序模型或 SLAM 状态写入。
+
+下一实施边界：
+
+```text
+next implementation       G2-MH1 local 3-D hypothesis shadow only
+dynamic decision          none
+hypothesis clustering     not yet
+G1-F/G1-M/G1-D            unchanged / default OFF or locked
+Optimizer/g2o/YOLO        unchanged
+```
+
+详细 SPEC：
+
+- `results/g2_motion_grouping_next_2026-08-01/G2_MH1_SPARSE_3D_RIGID_MOTION_HYPOTHESIS_SHADOW_SPEC.md`
+
+## 33. 2026-08-01 G2-MH1 实现与首轮审计完成
+
+已实现 Lee 2019 局部刚体 hypothesis 原型的稀疏适配：每个 F1/F3 有效 anchor
+加最近 6 点，用 Kabsch 拟合 7 点 SE(3)，并与背景相机模型在同一点集上的误差
+成对记录。实现默认关闭且严格 shadow-only；没有动态阈值、聚类、时序标签或
+SLAM 状态写入。合成测试、完整构建、CSV 和 SE(3) 不变量均通过。
+
+TUM fr1/xyz 真静态 smoke 暴露重要风险：局部模型误差中位 `0.00200 m`，背景
+模型 `0.00543 m`，RMS ratio `1.959`，同时产生不真实的相对平移/旋转中位
+`0.179 m / 0.207 rad`。说明 7 点自由模型会吸收静态深度/LK/位姿噪声。
+
+Bonn 非遮挡箱子 5 moving / 19 stationary proxy 中，background fit raw AUC
+`0.979`，但箱内减箱外后为 `0.642`；局部 improvement 的两个 AUC 为
+`0.768 / 0.505`，RMS ratio 为 `0.800 / 0.663`。本次 Codex 环境不能初始化
+CUDA，Bonn 运行是 geometry-only，并受人物混杂；所有 AUC 仅为开发排序。
+
+模块额外耗时约 `21--30 ms`，完整 pipeline 约 `18.8--20.1 FPS`。当前最强
+信号仍是已有背景运动不一致，局部 7 点模型尚未证明补上对象分组层。因此不进入
+DBSCAN，不选择阈值，不开放 G1-F/G1-D。下一步先核对 Lee hypothesis
+refinement/support verification 能否形成忠实轻量适配，否则冻结该路线为有限/
+负面结果。
+
+原文复核确认：Lee 的 7 点只是初始 seed hypothesis，之后对全部 `n` 个 grid
+scene-flow vector 计算误差、扩展到 `N` 点并重新估计，最后才聚类。因此当前负面
+结果针对“7 点训练内拟合直接用于判断”，不能外推为完整 Lee 路线失败。下一步若
+继续，必须先写 support/refinement shadow SPEC，不能直接加 DBSCAN。
+
+详细记录：
+
+- `results/g2_motion_grouping_next_2026-08-01/G2_MH1_SPARSE_3D_RIGID_MOTION_HYPOTHESIS_SHADOW_RESULT.md`
+- `DT-SLAM/tools/audit_sparse_rigid_hypotheses.py`
+- `DT-SLAM/tools/audit_sparse_rigid_hypothesis_proxy.py`
+
+## 34. 2026-08-01 独立支持验证完成，停止稀疏 7 点刚体路线
+
+按照实现前冻结的 support-validation SPEC，7 点 seed hypothesis 改为在另外 7 个
+未参与拟合的邻近点和全部非训练点上，与背景相机模型作成对验证。没有引入阈值、
+重估、DBSCAN、动态标签或 SLAM 状态修改。
+
+TUM fr1/xyz 真静态中，训练内 improvement 中位为 `+0.001951 m`，独立 holdout
+变为 `-0.001892 m`，RMS ratio 从 `1.954` 变为 `0.772`；证明先前优势确属训练
+内过拟合。Bonn moving proxy 箱内的 holdout RMS ratio 高于 stationary
+（`0.881/0.585`），但 moving 五帧该比值仍全部小于 1，且通常只有 1--3/7 个
+holdout 点支持局部模型。它是弱相对排序，不是可重估的共同运动支持集。
+
+独立支持审计额外中位耗时约 TUM `19.80 ms`、Bonn `26.55 ms`；Bonn 完整
+shadow pipeline 为 `12.79 FPS`。按冻结停止规则，不做支持集重估、DBSCAN 或新
+经验条件，停止当前稀疏 7 点刚体 hypothesis 路线。
+
+总计划未新增阶段，仍停留在第 1 个剩余模块“可靠运动组判决”。G1-F/G1-M 的旧
+实验路径保持默认关闭，G1-D 继续锁定。
+
+详细记录：
+
+- `results/g2_motion_grouping_next_2026-08-01/MOTION_GROUP_SUPPORT_VALIDATION_SPEC.md`
+- `results/motion_group_support_validation_2026-08-01/MOTION_GROUP_SUPPORT_VALIDATION_RESULT.md`
+
+## 35. 2026-08-01 当前轻量几何路线完成有限收尾
+
+用户决定先对当前路线作简单收尾，开源 SInDSLAM 留作后续独立研究。本轮没有
+新增检测算法、阈值或 SLAM 修改，只复用已经完成的正式 ATE/RPE/FPS、箱子证据
+和地图生命周期实验，并补做当前工作树构建、测试及 30 帧默认/几何回归。
+
+收尾结论：同步 semantic baseline 可作为默认主线；F1 sparse ego-flow、G1-F1
+association removal 和 G1-M1 MapPoint admission veto 工程有效，可作为默认关闭
+的实验模式。semantic+geometry 可完整运行，但没有稳定 ATE/RPE 改善证据；
+geometry-only 不具备独立使用资格；未知箱子对象检测和 G1-D 深度区域仍未完成。
+
+TUM walking 单轮组合模式相对 semantic-only 的 ATE 为 `-2.35%`、RPE
+`+3.90%`、FPS `-4.17%`，不能宣称稳定改善。Bonn nonobstructing 三轮中位组合
+模式 ATE `+16.99%`、RPE `-12.29%`、FPS `-0.55%`，且抽查未观察到箱子命中。
+强遮挡箱子只有 2 个实际 association 在粗框内被删除，同时 raw q10 主要位于框外。
+
+当前工作树回归构建和测试通过；标准/几何 30 帧 smoke 都输出 29/29 位姿，新
+rigid-hypothesis shadow 均未启动。当前 q10 filtering 继续默认关闭。后续若继续
+未知动态对象目标，应把 SInDSLAM 作为明确的重型方法升级，而不是继续补当前
+F1/q10。
+
+详细记录：
+
+- `results/geometry_limited_closeout_2026-08-01/GEOMETRY_LIMITED_CLOSEOUT_SPEC.md`
+- `results/geometry_limited_closeout_2026-08-01/GEOMETRY_LIMITED_CLOSEOUT_RESULT.md`

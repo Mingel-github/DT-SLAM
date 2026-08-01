@@ -2052,6 +2052,8 @@ GeometricDynamicDetector::SelectSparseFlowHighResidualCandidates(
     }
 
     GeometricSparseFlowFilterResult result;
+    result.qualityEligibleMask.assign(
+        sparseFlow.samples.size(),0);
     result.candidateMask.assign(sparseFlow.samples.size(),0);
     std::vector<float> scaleResiduals;
     scaleResiduals.reserve(sparseFlow.samples.size());
@@ -2078,6 +2080,7 @@ GeometricDynamicDetector::SelectSparseFlowHighResidualCandidates(
         if(!eligible)
             continue;
         qualityEligible[index] = 1;
+        result.qualityEligibleMask[index] = 1;
         ++result.qualityEligibleFeatureCount;
         scaleResiduals.push_back(
             sample.slamResidualMagnitudePixels);
@@ -2595,6 +2598,756 @@ const char *GeometricDynamicDetector::RigidityNodeStateName(
         return "no_graph_edge";
     }
     return "sparse_flow_invalid";
+}
+
+GeometricRigidHypothesisResult
+GeometricDynamicDetector::ComputeLocalRigidHypotheses(
+    const GeometricRigidityResult &rigidity,
+    const cv::Mat &TcwReference,
+    const cv::Mat &TcwCurrent,
+    const std::size_t localPointCount,
+    const std::size_t localValidationPointCount)
+{
+    ValidatePose(TcwReference,"rigid-hypothesis reference pose");
+    ValidatePose(TcwCurrent,"rigid-hypothesis current pose");
+    if(localPointCount<3)
+    {
+        throw std::invalid_argument(
+            "rigid hypotheses require at least three local points");
+    }
+    if(localValidationPointCount==0)
+    {
+        throw std::invalid_argument(
+            "rigid hypotheses require at least one validation point");
+    }
+    if(!cv::checkRange(TcwReference) || !cv::checkRange(TcwCurrent))
+    {
+        throw std::invalid_argument(
+            "rigid-hypothesis poses must contain finite values");
+    }
+
+    const std::chrono::steady_clock::time_point totalStart =
+        std::chrono::steady_clock::now();
+    GeometricRigidHypothesisResult result;
+    result.stats.inputNodeCount = rigidity.nodes.size();
+    result.stats.localPointCount = localPointCount;
+    result.stats.localValidationPointCount =
+        localValidationPointCount;
+    result.hypotheses.resize(rigidity.nodes.size());
+
+    std::vector<std::size_t> eligibleIndices;
+    eligibleIndices.reserve(rigidity.nodes.size());
+    for(std::size_t index=0; index<rigidity.nodes.size(); ++index)
+    {
+        const GeometricRigidityNodeSample &node = rigidity.nodes[index];
+        GeometricRigidHypothesisSample &hypothesis =
+            result.hypotheses[index];
+        hypothesis.anchorFeatureIndex = node.featureIndex;
+        hypothesis.anchorCurrentPixel = node.currentPixel;
+        hypothesis.anchorReferencePixel = node.referencePixel;
+        switch(node.state)
+        {
+        case GeometricRigidityNodeState::Measured:
+        case GeometricRigidityNodeState::NoGraphEdge:
+            eligibleIndices.push_back(index);
+            hypothesis.state =
+                GeometricRigidHypothesisState::InsufficientLocalSupport;
+            break;
+        case GeometricRigidityNodeState::ForwardBackwardRejected:
+            hypothesis.state =
+                GeometricRigidHypothesisState::ForwardBackwardRejected;
+            break;
+        case GeometricRigidityNodeState::SemanticExcluded:
+            hypothesis.state =
+                GeometricRigidHypothesisState::SemanticExcluded;
+            break;
+        case GeometricRigidityNodeState::CurrentDepthInvalid:
+            hypothesis.state =
+                GeometricRigidHypothesisState::CurrentDepthInvalid;
+            break;
+        case GeometricRigidityNodeState::UncertaintyInvalid:
+            hypothesis.state =
+                GeometricRigidHypothesisState::UncertaintyInvalid;
+            break;
+        case GeometricRigidityNodeState::OutsideImage:
+            hypothesis.state =
+                GeometricRigidHypothesisState::OutsideImage;
+            break;
+        case GeometricRigidityNodeState::DuplicateImagePoint:
+            hypothesis.state =
+                GeometricRigidHypothesisState::DuplicateImagePoint;
+            break;
+        case GeometricRigidityNodeState::SparseFlowInvalid:
+        default:
+            hypothesis.state =
+                GeometricRigidHypothesisState::SparseFlowInvalid;
+            break;
+        }
+    }
+    result.stats.eligibleNodeCount = eligibleIndices.size();
+
+    if(eligibleIndices.size()<localPointCount)
+    {
+        result.stats.insufficientLocalSupportCount =
+            eligibleIndices.size();
+        result.stats.totalMs =
+            std::chrono::duration<double,std::milli>(
+                std::chrono::steady_clock::now()-totalStart).count();
+        return result;
+    }
+
+    cv::Mat referencePose;
+    cv::Mat currentPose;
+    TcwReference.convertTo(referencePose,CV_64F);
+    TcwCurrent.convertTo(currentPose,CV_64F);
+    const cv::Mat backgroundTransform =
+        currentPose*referencePose.inv();
+    if(!cv::checkRange(backgroundTransform))
+    {
+        throw std::invalid_argument(
+            "rigid-hypothesis relative pose is not finite");
+    }
+    cv::Matx33d backgroundRotation;
+    cv::Vec3d backgroundTranslation;
+    for(int row=0; row<3; ++row)
+    {
+        for(int col=0; col<3; ++col)
+            backgroundRotation(row,col) =
+                backgroundTransform.at<double>(row,col);
+        backgroundTranslation[row] =
+            backgroundTransform.at<double>(row,3);
+    }
+
+    // This is a numerical-rank safeguard, not a motion threshold. Planar
+    // point sets remain valid; only nearly one-dimensional geometry is
+    // rejected.
+    const double degeneracyRatioFloor = 1e-6;
+    const double rmsDenominatorFloorMeters = 1e-9;
+    double accumulatedNeighborSearchMs = 0.0;
+    double accumulatedFitMs = 0.0;
+    double accumulatedSupportEvaluationMs = 0.0;
+
+    for(std::size_t anchorPosition=0;
+        anchorPosition<eligibleIndices.size(); ++anchorPosition)
+    {
+        const std::size_t anchorIndex =
+            eligibleIndices[anchorPosition];
+        GeometricRigidHypothesisSample &hypothesis =
+            result.hypotheses[anchorIndex];
+        const GeometricRigidityNodeSample &anchor =
+            rigidity.nodes[anchorIndex];
+
+        const std::chrono::steady_clock::time_point neighborStart =
+            std::chrono::steady_clock::now();
+        std::vector<std::pair<double,std::size_t> > neighbors;
+        neighbors.reserve(eligibleIndices.size()-1);
+        for(std::size_t candidatePosition=0;
+            candidatePosition<eligibleIndices.size();
+            ++candidatePosition)
+        {
+            const std::size_t candidateIndex =
+                eligibleIndices[candidatePosition];
+            if(candidateIndex==anchorIndex)
+                continue;
+            const cv::Point2f delta =
+                rigidity.nodes[candidateIndex].currentPixel-
+                anchor.currentPixel;
+            const double squaredDistance =
+                static_cast<double>(delta.x)*delta.x+
+                static_cast<double>(delta.y)*delta.y;
+            neighbors.push_back(
+                std::make_pair(squaredDistance,candidateIndex));
+        }
+        std::sort(neighbors.begin(),neighbors.end(),
+            [&rigidity](
+                const std::pair<double,std::size_t> &first,
+                const std::pair<double,std::size_t> &second)
+            {
+                if(first.first<second.first)
+                    return true;
+                if(first.first>second.first)
+                    return false;
+                return rigidity.nodes[first.second].featureIndex<
+                    rigidity.nodes[second.second].featureIndex;
+            });
+        accumulatedNeighborSearchMs +=
+            std::chrono::duration<double,std::milli>(
+                std::chrono::steady_clock::now()-neighborStart).count();
+
+        if(neighbors.size()+1<localPointCount)
+        {
+            hypothesis.state =
+                GeometricRigidHypothesisState::InsufficientLocalSupport;
+            ++result.stats.insufficientLocalSupportCount;
+            continue;
+        }
+
+        std::vector<std::size_t> memberNodeIndices;
+        memberNodeIndices.reserve(localPointCount);
+        memberNodeIndices.push_back(anchorIndex);
+        hypothesis.memberFeatureIndices.reserve(localPointCount);
+        hypothesis.memberFeatureIndices.push_back(anchor.featureIndex);
+        for(std::size_t localIndex=1;
+            localIndex<localPointCount; ++localIndex)
+        {
+            memberNodeIndices.push_back(neighbors[localIndex-1].second);
+            hypothesis.memberFeatureIndices.push_back(
+                rigidity.nodes[neighbors[localIndex-1].second].
+                    featureIndex);
+        }
+
+        const std::chrono::steady_clock::time_point fitStart =
+            std::chrono::steady_clock::now();
+        cv::Vec3d referenceCentroid(0.0,0.0,0.0);
+        cv::Vec3d currentCentroid(0.0,0.0,0.0);
+        double referenceMinDepth =
+            std::numeric_limits<double>::infinity();
+        double referenceMaxDepth = 0.0;
+        double currentMinDepth =
+            std::numeric_limits<double>::infinity();
+        double currentMaxDepth = 0.0;
+        double maximumSquaredRadius = 0.0;
+        for(std::size_t localIndex=0;
+            localIndex<memberNodeIndices.size(); ++localIndex)
+        {
+            const GeometricRigidityNodeSample &node =
+                rigidity.nodes[memberNodeIndices[localIndex]];
+            const cv::Vec3d referencePoint(
+                node.referencePointMeters.x,
+                node.referencePointMeters.y,
+                node.referencePointMeters.z);
+            const cv::Vec3d currentPoint(
+                node.currentPointMeters.x,
+                node.currentPointMeters.y,
+                node.currentPointMeters.z);
+            referenceCentroid += referencePoint;
+            currentCentroid += currentPoint;
+            referenceMinDepth = std::min(
+                referenceMinDepth,referencePoint[2]);
+            referenceMaxDepth = std::max(
+                referenceMaxDepth,referencePoint[2]);
+            currentMinDepth = std::min(
+                currentMinDepth,currentPoint[2]);
+            currentMaxDepth = std::max(
+                currentMaxDepth,currentPoint[2]);
+            const cv::Point2f delta =
+                node.currentPixel-anchor.currentPixel;
+            maximumSquaredRadius = std::max(
+                maximumSquaredRadius,
+                static_cast<double>(delta.x)*delta.x+
+                static_cast<double>(delta.y)*delta.y);
+        }
+        referenceCentroid *=
+            1.0/static_cast<double>(localPointCount);
+        currentCentroid *=
+            1.0/static_cast<double>(localPointCount);
+        hypothesis.maximumImageRadiusPixels =
+            static_cast<float>(std::sqrt(maximumSquaredRadius));
+        hypothesis.referenceDepthSpanMeters =
+            static_cast<float>(referenceMaxDepth-referenceMinDepth);
+        hypothesis.currentDepthSpanMeters =
+            static_cast<float>(currentMaxDepth-currentMinDepth);
+
+        cv::Matx33d referenceCovariance = cv::Matx33d::zeros();
+        cv::Matx33d crossCovariance = cv::Matx33d::zeros();
+        for(std::size_t localIndex=0;
+            localIndex<memberNodeIndices.size(); ++localIndex)
+        {
+            const GeometricRigidityNodeSample &node =
+                rigidity.nodes[memberNodeIndices[localIndex]];
+            const cv::Vec3d referenceCentered =
+                cv::Vec3d(
+                    node.referencePointMeters.x,
+                    node.referencePointMeters.y,
+                    node.referencePointMeters.z)-referenceCentroid;
+            const cv::Vec3d currentCentered =
+                cv::Vec3d(
+                    node.currentPointMeters.x,
+                    node.currentPointMeters.y,
+                    node.currentPointMeters.z)-currentCentroid;
+            referenceCovariance +=
+                referenceCentered*referenceCentered.t();
+            crossCovariance +=
+                referenceCentered*currentCentered.t();
+        }
+
+        cv::Mat referenceSingularValues;
+        cv::SVD::compute(
+            cv::Mat(referenceCovariance),referenceSingularValues);
+        if(referenceSingularValues.total()<2 ||
+           !cv::checkRange(referenceSingularValues))
+        {
+            hypothesis.state =
+                GeometricRigidHypothesisState::NumericFailure;
+            ++result.stats.numericFailureCount;
+            accumulatedFitMs +=
+                std::chrono::duration<double,std::milli>(
+                    std::chrono::steady_clock::now()-fitStart).count();
+            continue;
+        }
+        const double largestReferenceSingular =
+            referenceSingularValues.at<double>(0);
+        const double secondReferenceSingular =
+            referenceSingularValues.at<double>(1);
+        hypothesis.referenceSecondToFirstSingularRatio =
+            largestReferenceSingular>0.0
+            ? static_cast<float>(
+                secondReferenceSingular/largestReferenceSingular)
+            : 0.0f;
+        if(largestReferenceSingular<=
+               std::numeric_limits<double>::epsilon() ||
+           hypothesis.referenceSecondToFirstSingularRatio<=
+               degeneracyRatioFloor)
+        {
+            hypothesis.state =
+                GeometricRigidHypothesisState::DegenerateGeometry;
+            ++result.stats.degenerateGeometryCount;
+            accumulatedFitMs +=
+                std::chrono::duration<double,std::milli>(
+                    std::chrono::steady_clock::now()-fitStart).count();
+            continue;
+        }
+
+        cv::Mat singularValues;
+        cv::Mat leftSingularVectors;
+        cv::Mat rightSingularVectorsTransposed;
+        cv::SVD::compute(
+            cv::Mat(crossCovariance),singularValues,
+            leftSingularVectors,rightSingularVectorsTransposed,
+            cv::SVD::FULL_UV);
+        if(!cv::checkRange(singularValues) ||
+           !cv::checkRange(leftSingularVectors) ||
+           !cv::checkRange(rightSingularVectorsTransposed))
+        {
+            hypothesis.state =
+                GeometricRigidHypothesisState::NumericFailure;
+            ++result.stats.numericFailureCount;
+            accumulatedFitMs +=
+                std::chrono::duration<double,std::milli>(
+                    std::chrono::steady_clock::now()-fitStart).count();
+            continue;
+        }
+        cv::Mat correction = cv::Mat::eye(3,3,CV_64F);
+        cv::Mat localRotation =
+            rightSingularVectorsTransposed.t()*
+            leftSingularVectors.t();
+        if(cv::determinant(localRotation)<0.0)
+        {
+            correction.at<double>(2,2) = -1.0;
+            localRotation =
+                rightSingularVectorsTransposed.t()*correction*
+                leftSingularVectors.t();
+        }
+        if(!cv::checkRange(localRotation) ||
+           std::abs(cv::determinant(localRotation)-1.0)>1e-5)
+        {
+            hypothesis.state =
+                GeometricRigidHypothesisState::NumericFailure;
+            ++result.stats.numericFailureCount;
+            accumulatedFitMs +=
+                std::chrono::duration<double,std::milli>(
+                    std::chrono::steady_clock::now()-fitStart).count();
+            continue;
+        }
+        cv::Matx33d localRotationMatrix;
+        for(int row=0; row<3; ++row)
+            for(int col=0; col<3; ++col)
+                localRotationMatrix(row,col) =
+                    localRotation.at<double>(row,col);
+        const cv::Vec3d localTranslation =
+            currentCentroid-
+            localRotationMatrix*referenceCentroid;
+
+        std::vector<float> localErrors;
+        std::vector<float> backgroundErrors;
+        localErrors.reserve(localPointCount);
+        backgroundErrors.reserve(localPointCount);
+        double localSquaredErrorSum = 0.0;
+        double backgroundSquaredErrorSum = 0.0;
+        for(std::size_t localIndex=0;
+            localIndex<memberNodeIndices.size(); ++localIndex)
+        {
+            const GeometricRigidityNodeSample &node =
+                rigidity.nodes[memberNodeIndices[localIndex]];
+            const cv::Vec3d referencePoint(
+                node.referencePointMeters.x,
+                node.referencePointMeters.y,
+                node.referencePointMeters.z);
+            const cv::Vec3d currentPoint(
+                node.currentPointMeters.x,
+                node.currentPointMeters.y,
+                node.currentPointMeters.z);
+            const double localError = cv::norm(
+                localRotationMatrix*referencePoint+
+                localTranslation-currentPoint);
+            const double backgroundError = cv::norm(
+                backgroundRotation*referencePoint+
+                backgroundTranslation-currentPoint);
+            localErrors.push_back(static_cast<float>(localError));
+            backgroundErrors.push_back(
+                static_cast<float>(backgroundError));
+            localSquaredErrorSum += localError*localError;
+            backgroundSquaredErrorSum +=
+                backgroundError*backgroundError;
+        }
+        const double localRms = std::sqrt(
+            localSquaredErrorSum/static_cast<double>(localPointCount));
+        const double backgroundRms = std::sqrt(
+            backgroundSquaredErrorSum/
+            static_cast<double>(localPointCount));
+        hypothesis.localFitMedianMeters =
+            static_cast<float>(Percentile(localErrors,0.5));
+        hypothesis.localFitRmsMeters =
+            static_cast<float>(localRms);
+        hypothesis.localFitP90Meters =
+            static_cast<float>(Percentile(localErrors,0.9));
+        hypothesis.backgroundFitMedianMeters =
+            static_cast<float>(Percentile(backgroundErrors,0.5));
+        hypothesis.backgroundFitRmsMeters =
+            static_cast<float>(backgroundRms);
+        hypothesis.backgroundFitP90Meters =
+            static_cast<float>(Percentile(backgroundErrors,0.9));
+        hypothesis.medianImprovementMeters =
+            hypothesis.backgroundFitMedianMeters-
+            hypothesis.localFitMedianMeters;
+        if(localRms<=rmsDenominatorFloorMeters &&
+           backgroundRms<=rmsDenominatorFloorMeters)
+        {
+            hypothesis.backgroundToLocalRmsRatio = 1.0f;
+        }
+        else
+        {
+            hypothesis.backgroundToLocalRmsRatio =
+                static_cast<float>(
+                    backgroundRms/
+                    std::max(rmsDenominatorFloorMeters,localRms));
+        }
+
+        cv::Mat localTransform = cv::Mat::eye(4,4,CV_64F);
+        localRotation.copyTo(localTransform(cv::Rect(0,0,3,3)));
+        for(int row=0; row<3; ++row)
+            localTransform.at<double>(row,3) = localTranslation[row];
+        const cv::Mat relativeTransform =
+            localTransform*backgroundTransform.inv();
+        const double trace =
+            relativeTransform.at<double>(0,0)+
+            relativeTransform.at<double>(1,1)+
+            relativeTransform.at<double>(2,2);
+        const double cosine =
+            std::max(-1.0,std::min(1.0,0.5*(trace-1.0)));
+        hypothesis.relativeRotationRadians =
+            static_cast<float>(std::acos(cosine));
+        hypothesis.relativeTranslationMeters =
+            static_cast<float>(cv::norm(
+                cv::Vec3d(
+                    relativeTransform.at<double>(0,3),
+                    relativeTransform.at<double>(1,3),
+                    relativeTransform.at<double>(2,3))));
+        for(int row=0; row<4; ++row)
+            for(int col=0; col<4; ++col)
+                hypothesis.referenceToCurrent(row,col) =
+                    static_cast<float>(
+                        localTransform.at<double>(row,col));
+
+        const bool finiteMetrics =
+            std::isfinite(hypothesis.localFitMedianMeters) &&
+            std::isfinite(hypothesis.localFitRmsMeters) &&
+            std::isfinite(hypothesis.localFitP90Meters) &&
+            std::isfinite(hypothesis.backgroundFitMedianMeters) &&
+            std::isfinite(hypothesis.backgroundFitRmsMeters) &&
+            std::isfinite(hypothesis.backgroundFitP90Meters) &&
+            std::isfinite(hypothesis.medianImprovementMeters) &&
+            std::isfinite(hypothesis.backgroundToLocalRmsRatio) &&
+            std::isfinite(hypothesis.relativeTranslationMeters) &&
+            std::isfinite(hypothesis.relativeRotationRadians);
+        accumulatedFitMs +=
+            std::chrono::duration<double,std::milli>(
+                std::chrono::steady_clock::now()-fitStart).count();
+        if(!finiteMetrics)
+        {
+            hypothesis.state =
+                GeometricRigidHypothesisState::NumericFailure;
+            ++result.stats.numericFailureCount;
+        }
+        else
+        {
+            hypothesis.state =
+                GeometricRigidHypothesisState::Measured;
+            ++result.stats.validHypothesisCount;
+        }
+        if(!finiteMetrics)
+            continue;
+
+        const std::chrono::steady_clock::time_point supportStart =
+            std::chrono::steady_clock::now();
+        if(neighbors.size()+1<
+               localPointCount+localValidationPointCount)
+        {
+            hypothesis.validationState =
+                GeometricRigidHypothesisValidationState::
+                    InsufficientValidationSupport;
+            ++result.stats.insufficientValidationSupportCount;
+            accumulatedSupportEvaluationMs +=
+                std::chrono::duration<double,std::milli>(
+                    std::chrono::steady_clock::now()-supportStart).
+                    count();
+            continue;
+        }
+
+        std::vector<std::size_t> validationNodeIndices;
+        validationNodeIndices.reserve(localValidationPointCount);
+        hypothesis.validationFeatureIndices.reserve(
+            localValidationPointCount);
+        for(std::size_t validationIndex=0;
+            validationIndex<localValidationPointCount;
+            ++validationIndex)
+        {
+            const std::size_t neighborPosition =
+                localPointCount-1+validationIndex;
+            const std::size_t validationNodeIndex =
+                neighbors[neighborPosition].second;
+            validationNodeIndices.push_back(validationNodeIndex);
+            hypothesis.validationFeatureIndices.push_back(
+                rigidity.nodes[validationNodeIndex].featureIndex);
+        }
+
+        std::vector<float> validationLocalErrors;
+        std::vector<float> validationBackgroundErrors;
+        std::vector<float> validationImprovements;
+        validationLocalErrors.reserve(localValidationPointCount);
+        validationBackgroundErrors.reserve(localValidationPointCount);
+        validationImprovements.reserve(localValidationPointCount);
+        double validationLocalSquaredErrorSum = 0.0;
+        double validationBackgroundSquaredErrorSum = 0.0;
+        std::size_t validationLocalBetterCount = 0;
+        for(std::size_t validationIndex=0;
+            validationIndex<validationNodeIndices.size();
+            ++validationIndex)
+        {
+            const GeometricRigidityNodeSample &node =
+                rigidity.nodes[
+                    validationNodeIndices[validationIndex]];
+            const cv::Vec3d referencePoint(
+                node.referencePointMeters.x,
+                node.referencePointMeters.y,
+                node.referencePointMeters.z);
+            const cv::Vec3d currentPoint(
+                node.currentPointMeters.x,
+                node.currentPointMeters.y,
+                node.currentPointMeters.z);
+            const double localError = cv::norm(
+                localRotationMatrix*referencePoint+
+                localTranslation-currentPoint);
+            const double backgroundError = cv::norm(
+                backgroundRotation*referencePoint+
+                backgroundTranslation-currentPoint);
+            validationLocalErrors.push_back(
+                static_cast<float>(localError));
+            validationBackgroundErrors.push_back(
+                static_cast<float>(backgroundError));
+            validationImprovements.push_back(
+                static_cast<float>(backgroundError-localError));
+            validationLocalSquaredErrorSum +=
+                localError*localError;
+            validationBackgroundSquaredErrorSum +=
+                backgroundError*backgroundError;
+            if(localError<backgroundError)
+                ++validationLocalBetterCount;
+        }
+
+        const double validationLocalRms = std::sqrt(
+            validationLocalSquaredErrorSum/
+            static_cast<double>(localValidationPointCount));
+        const double validationBackgroundRms = std::sqrt(
+            validationBackgroundSquaredErrorSum/
+            static_cast<double>(localValidationPointCount));
+        hypothesis.validationLocalFitMedianMeters =
+            static_cast<float>(
+                Percentile(validationLocalErrors,0.5));
+        hypothesis.validationLocalFitRmsMeters =
+            static_cast<float>(validationLocalRms);
+        hypothesis.validationLocalFitP90Meters =
+            static_cast<float>(
+                Percentile(validationLocalErrors,0.9));
+        hypothesis.validationBackgroundFitMedianMeters =
+            static_cast<float>(
+                Percentile(validationBackgroundErrors,0.5));
+        hypothesis.validationBackgroundFitRmsMeters =
+            static_cast<float>(validationBackgroundRms);
+        hypothesis.validationBackgroundFitP90Meters =
+            static_cast<float>(
+                Percentile(validationBackgroundErrors,0.9));
+        hypothesis.validationMedianImprovementMeters =
+            static_cast<float>(
+                Percentile(validationImprovements,0.5));
+        if(validationLocalRms<=rmsDenominatorFloorMeters &&
+           validationBackgroundRms<=rmsDenominatorFloorMeters)
+        {
+            hypothesis.validationBackgroundToLocalRmsRatio = 1.0f;
+        }
+        else
+        {
+            hypothesis.validationBackgroundToLocalRmsRatio =
+                static_cast<float>(
+                    validationBackgroundRms/
+                    std::max(
+                        rmsDenominatorFloorMeters,
+                        validationLocalRms));
+        }
+        hypothesis.validationLocalBetterFraction =
+            static_cast<float>(validationLocalBetterCount)/
+            static_cast<float>(localValidationPointCount);
+
+        std::vector<float> globalImprovements;
+        globalImprovements.reserve(
+            eligibleIndices.size()-memberNodeIndices.size());
+        for(std::size_t candidatePosition=0;
+            candidatePosition<eligibleIndices.size();
+            ++candidatePosition)
+        {
+            const std::size_t candidateIndex =
+                eligibleIndices[candidatePosition];
+            if(std::find(
+                   memberNodeIndices.begin(),
+                   memberNodeIndices.end(),candidateIndex)!=
+               memberNodeIndices.end())
+            {
+                continue;
+            }
+            const GeometricRigidityNodeSample &node =
+                rigidity.nodes[candidateIndex];
+            const cv::Vec3d referencePoint(
+                node.referencePointMeters.x,
+                node.referencePointMeters.y,
+                node.referencePointMeters.z);
+            const cv::Vec3d currentPoint(
+                node.currentPointMeters.x,
+                node.currentPointMeters.y,
+                node.currentPointMeters.z);
+            const double localError = cv::norm(
+                localRotationMatrix*referencePoint+
+                localTranslation-currentPoint);
+            const double backgroundError = cv::norm(
+                backgroundRotation*referencePoint+
+                backgroundTranslation-currentPoint);
+            globalImprovements.push_back(
+                static_cast<float>(backgroundError-localError));
+            if(localError<backgroundError)
+                ++hypothesis.globalLocalBetterCount;
+        }
+        hypothesis.globalValidationCount =
+            globalImprovements.size();
+        hypothesis.globalLocalBetterFraction =
+            hypothesis.globalValidationCount>0
+            ? static_cast<float>(
+                  hypothesis.globalLocalBetterCount)/
+              static_cast<float>(
+                  hypothesis.globalValidationCount)
+            : 0.0f;
+        hypothesis.globalMedianImprovementMeters =
+            globalImprovements.empty()
+            ? 0.0f
+            : static_cast<float>(
+                  Percentile(globalImprovements,0.5));
+
+        const bool finiteValidationMetrics =
+            std::isfinite(
+                hypothesis.validationLocalFitMedianMeters) &&
+            std::isfinite(
+                hypothesis.validationLocalFitRmsMeters) &&
+            std::isfinite(
+                hypothesis.validationLocalFitP90Meters) &&
+            std::isfinite(
+                hypothesis.validationBackgroundFitMedianMeters) &&
+            std::isfinite(
+                hypothesis.validationBackgroundFitRmsMeters) &&
+            std::isfinite(
+                hypothesis.validationBackgroundFitP90Meters) &&
+            std::isfinite(
+                hypothesis.validationMedianImprovementMeters) &&
+            std::isfinite(
+                hypothesis.validationBackgroundToLocalRmsRatio) &&
+            std::isfinite(
+                hypothesis.validationLocalBetterFraction) &&
+            std::isfinite(
+                hypothesis.globalLocalBetterFraction) &&
+            std::isfinite(
+                hypothesis.globalMedianImprovementMeters);
+        if(finiteValidationMetrics)
+        {
+            hypothesis.validationState =
+                GeometricRigidHypothesisValidationState::Measured;
+            ++result.stats.validValidationCount;
+        }
+        else
+        {
+            hypothesis.validationState =
+                GeometricRigidHypothesisValidationState::NumericFailure;
+            ++result.stats.numericValidationFailureCount;
+        }
+        accumulatedSupportEvaluationMs +=
+            std::chrono::duration<double,std::milli>(
+                std::chrono::steady_clock::now()-supportStart).count();
+    }
+
+    result.stats.neighborSearchMs = accumulatedNeighborSearchMs;
+    result.stats.fitMs = accumulatedFitMs;
+    result.stats.supportEvaluationMs =
+        accumulatedSupportEvaluationMs;
+    result.stats.totalMs =
+        std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-totalStart).count();
+    return result;
+}
+
+const char *
+GeometricDynamicDetector::RigidHypothesisValidationStateName(
+    const GeometricRigidHypothesisValidationState state)
+{
+    switch(state)
+    {
+    case GeometricRigidHypothesisValidationState::Measured:
+        return "measured";
+    case GeometricRigidHypothesisValidationState::SeedHypothesisInvalid:
+        return "seed_hypothesis_invalid";
+    case GeometricRigidHypothesisValidationState::
+             InsufficientValidationSupport:
+        return "insufficient_validation_support";
+    case GeometricRigidHypothesisValidationState::NumericFailure:
+        return "numeric_failure";
+    }
+    return "numeric_failure";
+}
+
+const char *GeometricDynamicDetector::RigidHypothesisStateName(
+    const GeometricRigidHypothesisState state)
+{
+    switch(state)
+    {
+    case GeometricRigidHypothesisState::Measured:
+        return "measured";
+    case GeometricRigidHypothesisState::SparseFlowInvalid:
+        return "sparse_flow_invalid";
+    case GeometricRigidHypothesisState::ForwardBackwardRejected:
+        return "forward_backward_rejected";
+    case GeometricRigidHypothesisState::SemanticExcluded:
+        return "semantic_excluded";
+    case GeometricRigidHypothesisState::CurrentDepthInvalid:
+        return "current_depth_invalid";
+    case GeometricRigidHypothesisState::UncertaintyInvalid:
+        return "uncertainty_invalid";
+    case GeometricRigidHypothesisState::OutsideImage:
+        return "outside_image";
+    case GeometricRigidHypothesisState::DuplicateImagePoint:
+        return "duplicate_image_point";
+    case GeometricRigidHypothesisState::InsufficientLocalSupport:
+        return "insufficient_local_support";
+    case GeometricRigidHypothesisState::DegenerateGeometry:
+        return "degenerate_geometry";
+    case GeometricRigidHypothesisState::NumericFailure:
+        return "numeric_failure";
+    }
+    return "numeric_failure";
 }
 
 GeometricReferenceSelectionResult

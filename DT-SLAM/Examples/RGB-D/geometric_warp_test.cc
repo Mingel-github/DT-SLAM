@@ -1253,6 +1253,370 @@ ORB_SLAM2::GeometricSparseFlowResult MakeRigiditySparseFlow(
     return result;
 }
 
+ORB_SLAM2::GeometricRigidityResult MakeRigidHypothesisInput(
+    const std::vector<cv::Point3f> &referencePoints,
+    const std::vector<cv::Point3f> &currentPoints,
+    const std::vector<cv::Point2f> &currentPixels)
+{
+    Require(referencePoints.size()==currentPoints.size() &&
+            referencePoints.size()==currentPixels.size(),
+            "rigid-hypothesis synthetic vectors must match");
+    ORB_SLAM2::GeometricRigidityResult result;
+    result.nodes.resize(referencePoints.size());
+    for(std::size_t index=0; index<referencePoints.size(); ++index)
+    {
+        ORB_SLAM2::GeometricRigidityNodeSample &node =
+            result.nodes[index];
+        node.featureIndex = index;
+        node.currentPixel = currentPixels[index];
+        node.referencePixel = currentPixels[index];
+        node.referencePointMeters = referencePoints[index];
+        node.currentPointMeters = currentPoints[index];
+        node.state = ORB_SLAM2::GeometricRigidityNodeState::Measured;
+    }
+    result.stats.eligibleNodeCount = referencePoints.size();
+    return result;
+}
+
+cv::Point3f TransformSyntheticPoint(
+    const cv::Matx33f &rotation,
+    const cv::Vec3f &translation,
+    const cv::Point3f &point)
+{
+    const cv::Vec3f transformed =
+        rotation*cv::Vec3f(point.x,point.y,point.z)+translation;
+    return cv::Point3f(transformed[0],transformed[1],transformed[2]);
+}
+
+std::vector<cv::Point3f> SyntheticRigidPoints(const float xOffset)
+{
+    return {
+        cv::Point3f(xOffset+0.00f,0.00f,2.00f),
+        cv::Point3f(xOffset+0.10f,0.00f,2.00f),
+        cv::Point3f(xOffset+0.00f,0.10f,2.00f),
+        cv::Point3f(xOffset+0.10f,0.10f,2.00f),
+        cv::Point3f(xOffset+0.03f,0.04f,2.05f),
+        cv::Point3f(xOffset+0.08f,0.03f,1.96f),
+        cv::Point3f(xOffset+0.05f,0.08f,2.03f)};
+}
+
+std::vector<cv::Point2f> SyntheticImageCluster(const float xOffset)
+{
+    return {
+        cv::Point2f(xOffset+0.0f,0.0f),
+        cv::Point2f(xOffset+5.0f,0.0f),
+        cv::Point2f(xOffset+0.0f,5.0f),
+        cv::Point2f(xOffset+5.0f,5.0f),
+        cv::Point2f(xOffset+2.0f,2.0f),
+        cv::Point2f(xOffset+4.0f,2.0f),
+        cv::Point2f(xOffset+2.0f,4.0f)};
+}
+
+std::vector<cv::Point3f> SyntheticRigidPoints14(const float xOffset)
+{
+    std::vector<cv::Point3f> points = SyntheticRigidPoints(xOffset);
+    const std::vector<cv::Point3f> second =
+        SyntheticRigidPoints(xOffset+0.02f);
+    for(std::size_t index=0; index<second.size(); ++index)
+    {
+        points.push_back(
+            cv::Point3f(
+                second[index].x,
+                second[index].y+0.16f,
+                second[index].z));
+    }
+    return points;
+}
+
+std::vector<cv::Point2f> SyntheticImageCluster14(const float xOffset)
+{
+    std::vector<cv::Point2f> pixels = SyntheticImageCluster(xOffset);
+    const std::vector<cv::Point2f> second =
+        SyntheticImageCluster(xOffset);
+    for(std::size_t index=0; index<second.size(); ++index)
+    {
+        pixels.push_back(
+            cv::Point2f(second[index].x,second[index].y+12.0f));
+    }
+    return pixels;
+}
+
+void TestRigidHypothesisStaticModel()
+{
+    const std::vector<cv::Point3f> reference =
+        SyntheticRigidPoints(0.0f);
+    const float angle = 0.04f;
+    const cv::Matx33f rotation(
+        std::cos(angle),-std::sin(angle),0.0f,
+        std::sin(angle), std::cos(angle),0.0f,
+        0.0f,            0.0f,           1.0f);
+    const cv::Vec3f translation(0.05f,-0.02f,0.01f);
+    std::vector<cv::Point3f> current;
+    for(std::size_t index=0; index<reference.size(); ++index)
+        current.push_back(
+            TransformSyntheticPoint(rotation,translation,reference[index]));
+    cv::Mat TcwCurrent = IdentityPose();
+    for(int row=0; row<3; ++row)
+    {
+        for(int col=0; col<3; ++col)
+            TcwCurrent.at<float>(row,col) = rotation(row,col);
+        TcwCurrent.at<float>(row,3) = translation[row];
+    }
+    const ORB_SLAM2::GeometricRigidHypothesisResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                MakeRigidHypothesisInput(
+                    reference,current,SyntheticImageCluster(10.0f)),
+                IdentityPose(),TcwCurrent);
+
+    Require(result.stats.validHypothesisCount==reference.size(),
+            "static rigid model must produce one valid hypothesis per node");
+    Require(result.stats.insufficientValidationSupportCount==
+                reference.size(),
+            "seven training points must expose missing independent support");
+    for(std::size_t index=0; index<result.hypotheses.size(); ++index)
+    {
+        const ORB_SLAM2::GeometricRigidHypothesisSample &sample =
+            result.hypotheses[index];
+        Require(sample.state==
+                    ORB_SLAM2::GeometricRigidHypothesisState::Measured,
+                "static rigid hypothesis must be measured");
+        Require(sample.localFitRmsMeters<1e-5f &&
+                sample.backgroundFitRmsMeters<1e-5f,
+                "static local and background models must both fit");
+        Require(sample.relativeTranslationMeters<1e-4f &&
+                sample.relativeRotationRadians<1e-4f,
+                "static local model must recover the background transform");
+        Require(sample.validationState==
+                    ORB_SLAM2::GeometricRigidHypothesisValidationState::
+                        InsufficientValidationSupport,
+                "training-only hypothesis must not claim validation");
+    }
+}
+
+void TestRigidHypothesisHeldOutStaticModel()
+{
+    const std::vector<cv::Point3f> reference =
+        SyntheticRigidPoints14(0.0f);
+    const float angle = 0.04f;
+    const cv::Matx33f rotation(
+        std::cos(angle),-std::sin(angle),0.0f,
+        std::sin(angle), std::cos(angle),0.0f,
+        0.0f,            0.0f,           1.0f);
+    const cv::Vec3f translation(0.05f,-0.02f,0.01f);
+    std::vector<cv::Point3f> current;
+    for(std::size_t index=0; index<reference.size(); ++index)
+    {
+        current.push_back(
+            TransformSyntheticPoint(
+                rotation,translation,reference[index]));
+    }
+    cv::Mat TcwCurrent = IdentityPose();
+    for(int row=0; row<3; ++row)
+    {
+        for(int col=0; col<3; ++col)
+            TcwCurrent.at<float>(row,col) = rotation(row,col);
+        TcwCurrent.at<float>(row,3) = translation[row];
+    }
+    const ORB_SLAM2::GeometricRigidityResult input =
+        MakeRigidHypothesisInput(
+            reference,current,SyntheticImageCluster14(10.0f));
+    const ORB_SLAM2::GeometricRigidHypothesisResult first =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                input,IdentityPose(),TcwCurrent);
+    const ORB_SLAM2::GeometricRigidHypothesisResult second =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                input,IdentityPose(),TcwCurrent);
+
+    Require(first.stats.validValidationCount==reference.size() &&
+            first.stats.insufficientValidationSupportCount==0,
+            "static 14-point model must provide independent support");
+    for(std::size_t index=0; index<first.hypotheses.size(); ++index)
+    {
+        const ORB_SLAM2::GeometricRigidHypothesisSample &sample =
+            first.hypotheses[index];
+        Require(sample.validationState==
+                    ORB_SLAM2::GeometricRigidHypothesisValidationState::
+                        Measured,
+                "static holdout must be measured");
+        Require(sample.validationLocalFitRmsMeters<1e-5f &&
+                sample.validationBackgroundFitRmsMeters<1e-5f,
+                "correct static transform must generalize to holdout");
+        Require(sample.validationFeatureIndices==
+                    second.hypotheses[index].validationFeatureIndices &&
+                std::abs(
+                    sample.validationMedianImprovementMeters-
+                    second.hypotheses[index].
+                        validationMedianImprovementMeters)<1e-9f,
+                "holdout selection and metrics must be deterministic");
+    }
+}
+
+void TestRigidHypothesisHeldOutTwoMotions()
+{
+    std::vector<cv::Point3f> reference =
+        SyntheticRigidPoints14(0.0f);
+    const std::vector<cv::Point3f> objectReference =
+        SyntheticRigidPoints14(1.0f);
+    reference.insert(
+        reference.end(),objectReference.begin(),objectReference.end());
+    std::vector<cv::Point3f> current(reference.begin(),reference.end());
+    for(std::size_t index=14; index<current.size(); ++index)
+        current[index].x += 0.20f;
+    std::vector<cv::Point2f> pixels =
+        SyntheticImageCluster14(10.0f);
+    const std::vector<cv::Point2f> objectPixels =
+        SyntheticImageCluster14(200.0f);
+    pixels.insert(pixels.end(),objectPixels.begin(),objectPixels.end());
+
+    const ORB_SLAM2::GeometricRigidHypothesisResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                MakeRigidHypothesisInput(reference,current,pixels),
+                IdentityPose(),IdentityPose());
+    const ORB_SLAM2::GeometricRigidHypothesisSample &object =
+        result.hypotheses[14];
+    Require(object.validationState==
+                ORB_SLAM2::GeometricRigidHypothesisValidationState::
+                    Measured,
+            "object holdout must be measured");
+    Require(object.validationLocalFitRmsMeters<1e-5f &&
+            object.validationBackgroundFitMedianMeters>0.19f &&
+            object.validationMedianImprovementMeters>0.19f &&
+            object.validationLocalBetterFraction>0.99f,
+            "independent object model must generalize beyond seed points");
+}
+
+void TestRigidHypothesisHeldOutMotionBoundary()
+{
+    std::vector<cv::Point3f> reference = SyntheticRigidPoints(0.0f);
+    const std::vector<cv::Point3f> secondMotion =
+        SyntheticRigidPoints(0.30f);
+    reference.insert(
+        reference.end(),secondMotion.begin(),secondMotion.end());
+    std::vector<cv::Point3f> current(reference.begin(),reference.end());
+    for(std::size_t index=7; index<current.size(); ++index)
+        current[index].x += 0.20f;
+    std::vector<cv::Point2f> pixels = SyntheticImageCluster(10.0f);
+    const std::vector<cv::Point2f> nearbyPixels =
+        SyntheticImageCluster(30.0f);
+    pixels.insert(pixels.end(),nearbyPixels.begin(),nearbyPixels.end());
+
+    const ORB_SLAM2::GeometricRigidHypothesisResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                MakeRigidHypothesisInput(reference,current,pixels),
+                IdentityPose(),IdentityPose());
+    const ORB_SLAM2::GeometricRigidHypothesisSample &sample =
+        result.hypotheses[0];
+    Require(sample.validationState==
+                ORB_SLAM2::GeometricRigidHypothesisValidationState::
+                    Measured,
+            "boundary holdout must be measured");
+    Require(sample.validationLocalFitMedianMeters>0.15f &&
+            std::abs(sample.validationMedianImprovementMeters)<1e-4f,
+            "seed model must not silently generalize across another motion");
+}
+
+void TestRigidHypothesisTwoMotions()
+{
+    std::vector<cv::Point3f> reference = SyntheticRigidPoints(0.0f);
+    const std::vector<cv::Point3f> objectReference =
+        SyntheticRigidPoints(1.0f);
+    reference.insert(
+        reference.end(),objectReference.begin(),objectReference.end());
+    std::vector<cv::Point3f> current(reference.begin(),reference.end());
+    for(std::size_t index=7; index<current.size(); ++index)
+        current[index].x += 0.20f;
+    std::vector<cv::Point2f> pixels = SyntheticImageCluster(10.0f);
+    const std::vector<cv::Point2f> objectPixels =
+        SyntheticImageCluster(200.0f);
+    pixels.insert(pixels.end(),objectPixels.begin(),objectPixels.end());
+
+    const ORB_SLAM2::GeometricRigidHypothesisResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                MakeRigidHypothesisInput(reference,current,pixels),
+                IdentityPose(),IdentityPose());
+    const ORB_SLAM2::GeometricRigidHypothesisSample &background =
+        result.hypotheses[0];
+    const ORB_SLAM2::GeometricRigidHypothesisSample &object =
+        result.hypotheses[7];
+    Require(background.state==
+                ORB_SLAM2::GeometricRigidHypothesisState::Measured &&
+            object.state==
+                ORB_SLAM2::GeometricRigidHypothesisState::Measured,
+            "both synthetic motions must produce valid hypotheses");
+    Require(background.backgroundFitRmsMeters<1e-5f,
+            "synthetic background must fit the camera model");
+    Require(object.localFitRmsMeters<1e-5f &&
+            object.backgroundFitMedianMeters>0.19f &&
+            object.medianImprovementMeters>0.19f,
+            "independent rigid object must prefer its local model");
+    Require(std::abs(object.relativeTranslationMeters-0.20f)<1e-4f,
+            "independent rigid transform translation is incorrect");
+}
+
+void TestRigidHypothesisMixedBoundary()
+{
+    const std::vector<cv::Point3f> reference =
+        SyntheticRigidPoints(0.0f);
+    std::vector<cv::Point3f> current(reference.begin(),reference.end());
+    for(std::size_t index=4; index<current.size(); ++index)
+        current[index].x += 0.20f;
+    const ORB_SLAM2::GeometricRigidHypothesisResult result =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                MakeRigidHypothesisInput(
+                    reference,current,SyntheticImageCluster(10.0f)),
+                IdentityPose(),IdentityPose());
+    Require(result.hypotheses[0].state==
+                ORB_SLAM2::GeometricRigidHypothesisState::Measured,
+            "mixed model remains a measurable diagnostic hypothesis");
+    Require(result.hypotheses[0].localFitRmsMeters>0.02f,
+            "mixed-motion neighborhood must expose elevated local fit error");
+}
+
+void TestRigidHypothesisDegenerateAndInvalid()
+{
+    std::vector<cv::Point3f> reference;
+    std::vector<cv::Point3f> current;
+    std::vector<cv::Point2f> pixels;
+    for(int index=0; index<7; ++index)
+    {
+        reference.push_back(
+            cv::Point3f(0.05f*index,0.0f,2.0f));
+        current.push_back(reference.back());
+        pixels.push_back(cv::Point2f(10.0f+index,20.0f));
+    }
+    ORB_SLAM2::GeometricRigidityResult input =
+        MakeRigidHypothesisInput(reference,current,pixels);
+    input.nodes[6].state =
+        ORB_SLAM2::GeometricRigidityNodeState::CurrentDepthInvalid;
+    const ORB_SLAM2::GeometricRigidHypothesisResult insufficient =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                input,IdentityPose(),IdentityPose());
+    Require(insufficient.stats.eligibleNodeCount==6 &&
+            insufficient.stats.validHypothesisCount==0,
+            "invalid node must leave explicit insufficient support");
+    Require(insufficient.hypotheses[6].state==
+                ORB_SLAM2::GeometricRigidHypothesisState::
+                    CurrentDepthInvalid,
+            "invalid current depth must retain its no-evidence state");
+
+    const ORB_SLAM2::GeometricRigidHypothesisResult degenerate =
+        ORB_SLAM2::GeometricDynamicDetector::
+            ComputeLocalRigidHypotheses(
+                MakeRigidHypothesisInput(reference,current,pixels),
+                IdentityPose(),IdentityPose());
+    Require(degenerate.stats.degenerateGeometryCount==7 &&
+            degenerate.stats.validHypothesisCount==0,
+            "collinear point sets must be rejected as degenerate");
+}
+
 void TestLocalRigidityRigidTranslation()
 {
     const std::vector<cv::Point2f> reference = {
@@ -1467,15 +1831,22 @@ int main()
         TestLocalRigidityInvalidAndDuplicateNodes();
         TestLocalRigidityDepthUncertaintyScaling();
         TestLocalRigidityDepthMixtureUncertainty();
+        TestRigidHypothesisStaticModel();
+        TestRigidHypothesisHeldOutStaticModel();
+        TestRigidHypothesisHeldOutTwoMotions();
+        TestRigidHypothesisHeldOutMotionBoundary();
+        TestRigidHypothesisTwoMotions();
+        TestRigidHypothesisMixedBoundary();
+        TestRigidHypothesisDegenerateAndInvalid();
     }
     catch(const std::exception &error)
     {
-        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U/G1-F1 Test] FAIL: "
+        std::cerr << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U/G2-MH1/G1-F1 Test] FAIL: "
                   << error.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U/G1-F1 Test] PASS"
+    std::cout << "[Geometry G0/G2-1/G2-2R/G2-2S/G2-2G/G2-3R0/G2-3R1/G2-3R3/G2-3R4/G2-4A/G2-4B/G2-4F0/G2-4F1/G2-4F2B/G2-4F3/G2-4F3U/G2-MH1/G1-F1 Test] PASS"
               << std::endl;
     return 0;
 }

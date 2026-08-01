@@ -1,0 +1,15 @@
+{
+  "aggregate_removed_sum": 612,
+  "all_removed_association_rows": 612,
+  "duplicate_frame_feature_keys": 0,
+  "inside_coarse_box_bbox": 0,
+  "inside_person_mask": 0,
+  "outside_both": 13,
+  "per_frame_count_mismatches": [],
+  "review_bbox_frames": 24,
+  "review_bbox_frames_with_removals": 7,
+  "reviewed_removed_points": 13,
+  "scope": "coarse unverified review proxy; not object ground truth",
+  "semantic_dynamic_rows": 0,
+  "tracking_frame_rows": 777
+}

@@ -1,0 +1,70 @@
+{
+  "all_candidate_associations": 387,
+  "all_removed_associations": 281,
+  "invariant_violations": [],
+  "passed": true,
+  "q_distribution_semantic_static_quality_eligible": {
+    "inside_box": {
+      "count": 5512,
+      "count_q_ge_10": 26,
+      "count_q_ge_3": 158,
+      "count_q_ge_5": 86,
+      "maximum": 55.5336875915527,
+      "median": 0.629470348358154,
+      "p90": 1.6561576128006,
+      "p95": 2.30861568450928,
+      "p99": 5.90225601196289
+    },
+    "note": "q>=3/5 counts are descriptive only; frozen q=10 is unchanged",
+    "outside_box": {
+      "count": 3346,
+      "count_q_ge_10": 197,
+      "count_q_ge_3": 387,
+      "count_q_ge_5": 344,
+      "maximum": 52.5003395080566,
+      "median": 0.724450647830963,
+      "p90": 5.71167325973511,
+      "p95": 11.4311075210571,
+      "p99": 15.9136123657227
+    }
+  },
+  "review_frames": 17,
+  "scope": "coarse unverified RGB-only box review frames",
+  "stages": {
+    "measured": {
+      "all_review_frame": 10353,
+      "inside_box": 6422,
+      "inside_fraction": 0.6203032937312856
+    },
+    "orb_features": {
+      "all_review_frame": 14289,
+      "inside_box": 7426,
+      "inside_fraction": 0.5197004688921548
+    },
+    "q_candidate": {
+      "all_review_frame": 223,
+      "inside_box": 26,
+      "inside_fraction": 0.11659192825112108
+    },
+    "q_candidate_initial_association": {
+      "all_review_frame": 0,
+      "inside_box": 0,
+      "inside_fraction": null
+    },
+    "q_candidate_post_search_association": {
+      "all_review_frame": 2,
+      "inside_box": 2,
+      "inside_fraction": 1.0
+    },
+    "quality_eligible": {
+      "all_review_frame": 8960,
+      "inside_box": 5530,
+      "inside_fraction": 0.6171875
+    },
+    "removed_association": {
+      "all_review_frame": 2,
+      "inside_box": 2,
+      "inside_fraction": 1.0
+    }
+  }
+}

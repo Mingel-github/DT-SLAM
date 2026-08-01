@@ -104,6 +104,10 @@ def main():
         geometry_outputs = {
             "DT_SLAM_GEOMETRY_TRACKING_FILTER_CSV":
                 str(output_directory / "tracking_filter.csv"),
+            "DT_SLAM_GEOMETRY_TRACKING_FILTER_FEATURE_CSV":
+                str(output_directory / "removed_associations.csv"),
+            "DT_SLAM_GEOMETRY_TRACKING_FILTER_CANDIDATE_CSV":
+                str(output_directory / "candidate_associations.csv"),
             "DT_SLAM_GEOMETRY_MAPPING_FILTER_CSV":
                 str(output_directory / "mapping_filter.csv"),
         }
@@ -111,6 +115,8 @@ def main():
     else:
         for name in (
                 "DT_SLAM_GEOMETRY_TRACKING_FILTER_CSV",
+                "DT_SLAM_GEOMETRY_TRACKING_FILTER_FEATURE_CSV",
+                "DT_SLAM_GEOMETRY_TRACKING_FILTER_CANDIDATE_CSV",
                 "DT_SLAM_GEOMETRY_MAPPING_COUNTERFACTUAL_CSV",
                 "DT_SLAM_GEOMETRY_MAPPING_FILTER_CSV",
                 "DT_SLAM_GEOMETRY_MAP_QUALITY_PREFIX"):

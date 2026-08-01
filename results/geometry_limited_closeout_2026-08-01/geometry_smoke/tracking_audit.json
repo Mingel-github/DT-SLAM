@@ -1,0 +1,22 @@
+{
+  "files": [
+    {
+      "applied_frames": 0,
+      "baseline_associations": 14437,
+      "candidate_associations": 28,
+      "invariant_violations": [],
+      "passed": true,
+      "path": "/home/zhu/dynaslam_ws/results/geometry_limited_closeout_2026-08-01/geometry_smoke/tracking_filter.csv",
+      "q_values": [
+        10.0
+      ],
+      "removed_associations": 0,
+      "removed_fraction_of_baseline": 0.0,
+      "rows": 28,
+      "states": {
+        "relocalization_window_fail_open": 28
+      }
+    }
+  ],
+  "passed": true
+}

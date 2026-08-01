@@ -1,0 +1,19 @@
+{
+  "applied_rows": 0,
+  "candidate_created_mappoints": 2,
+  "candidate_features": 5,
+  "created_mappoints": 2509,
+  "fail_open_rows": 5,
+  "files": 1,
+  "initialization_rows": 1,
+  "keyframe_rows": 4,
+  "new_dynamic_flags": 0,
+  "rows": 5,
+  "states": {
+    "reference_unavailable_fail_open": 1,
+    "tracking_safeguard_fail_open": 4
+  },
+  "status": "PASS",
+  "vetoed_depth_features": 0,
+  "violations": []
+}

@@ -252,6 +252,7 @@ struct GeometricSparseFlowResult
 // association safeguards before using it.
 struct GeometricSparseFlowFilterResult
 {
+    std::vector<unsigned char> qualityEligibleMask;
     std::vector<unsigned char> candidateMask;
     bool scaleValid = false;
     float frameScalePixels = 0.0f;
@@ -346,6 +347,97 @@ struct GeometricRigidityResult
     std::vector<GeometricRigidityNodeSample> nodes;
     std::vector<GeometricRigidityEdgeSample> edges;
     GeometricRigidityStats stats;
+};
+
+enum class GeometricRigidHypothesisState
+{
+    Measured,
+    SparseFlowInvalid,
+    ForwardBackwardRejected,
+    SemanticExcluded,
+    CurrentDepthInvalid,
+    UncertaintyInvalid,
+    OutsideImage,
+    DuplicateImagePoint,
+    InsufficientLocalSupport,
+    DegenerateGeometry,
+    NumericFailure
+};
+
+enum class GeometricRigidHypothesisValidationState
+{
+    Measured,
+    SeedHypothesisInvalid,
+    InsufficientValidationSupport,
+    NumericFailure
+};
+
+struct GeometricRigidHypothesisSample
+{
+    std::size_t anchorFeatureIndex = 0;
+    cv::Point2f anchorCurrentPixel;
+    cv::Point2f anchorReferencePixel;
+    std::vector<std::size_t> memberFeatureIndices;
+    std::vector<std::size_t> validationFeatureIndices;
+    cv::Matx44f referenceToCurrent = cv::Matx44f::eye();
+    float localFitMedianMeters = 0.0f;
+    float localFitRmsMeters = 0.0f;
+    float localFitP90Meters = 0.0f;
+    float backgroundFitMedianMeters = 0.0f;
+    float backgroundFitRmsMeters = 0.0f;
+    float backgroundFitP90Meters = 0.0f;
+    float medianImprovementMeters = 0.0f;
+    float backgroundToLocalRmsRatio = 0.0f;
+    float relativeTranslationMeters = 0.0f;
+    float relativeRotationRadians = 0.0f;
+    float maximumImageRadiusPixels = 0.0f;
+    float referenceDepthSpanMeters = 0.0f;
+    float currentDepthSpanMeters = 0.0f;
+    float referenceSecondToFirstSingularRatio = 0.0f;
+    float validationLocalFitMedianMeters = 0.0f;
+    float validationLocalFitRmsMeters = 0.0f;
+    float validationLocalFitP90Meters = 0.0f;
+    float validationBackgroundFitMedianMeters = 0.0f;
+    float validationBackgroundFitRmsMeters = 0.0f;
+    float validationBackgroundFitP90Meters = 0.0f;
+    float validationMedianImprovementMeters = 0.0f;
+    float validationBackgroundToLocalRmsRatio = 0.0f;
+    float validationLocalBetterFraction = 0.0f;
+    std::size_t globalValidationCount = 0;
+    std::size_t globalLocalBetterCount = 0;
+    float globalLocalBetterFraction = 0.0f;
+    float globalMedianImprovementMeters = 0.0f;
+    GeometricRigidHypothesisState state =
+        GeometricRigidHypothesisState::SparseFlowInvalid;
+    GeometricRigidHypothesisValidationState validationState =
+        GeometricRigidHypothesisValidationState::SeedHypothesisInvalid;
+};
+
+struct GeometricRigidHypothesisStats
+{
+    std::size_t inputNodeCount = 0;
+    std::size_t eligibleNodeCount = 0;
+    std::size_t validHypothesisCount = 0;
+    std::size_t insufficientLocalSupportCount = 0;
+    std::size_t degenerateGeometryCount = 0;
+    std::size_t numericFailureCount = 0;
+    std::size_t localPointCount = 0;
+    std::size_t localValidationPointCount = 0;
+    std::size_t validValidationCount = 0;
+    std::size_t insufficientValidationSupportCount = 0;
+    std::size_t numericValidationFailureCount = 0;
+    double neighborSearchMs = 0.0;
+    double fitMs = 0.0;
+    double supportEvaluationMs = 0.0;
+    double totalMs = 0.0;
+};
+
+struct GeometricRigidHypothesisResult
+{
+    // One row per input rigidity node. Non-measured states are explicit
+    // no-evidence outcomes and must not be interpreted as static.
+    std::vector<GeometricRigidHypothesisSample> hypotheses;
+    GeometricRigidHypothesisStats stats;
 };
 
 struct GeometricRegionPartitionStats
@@ -584,6 +676,23 @@ public:
 
     static const char *RigidityNodeStateName(
         const GeometricRigidityNodeState state);
+
+    // G2-MH1 shadow-only deterministic local rigid-motion hypotheses.
+    // The same local 3-D correspondences are evaluated under a fitted
+    // SE(3) model and the background camera model. No threshold, clustering,
+    // object label, or SLAM mutation is produced.
+    static GeometricRigidHypothesisResult ComputeLocalRigidHypotheses(
+        const GeometricRigidityResult &rigidity,
+        const cv::Mat &TcwReference,
+        const cv::Mat &TcwCurrent,
+        const std::size_t localPointCount = 7,
+        const std::size_t localValidationPointCount = 7);
+
+    static const char *RigidHypothesisStateName(
+        const GeometricRigidHypothesisState state);
+
+    static const char *RigidHypothesisValidationStateName(
+        const GeometricRigidHypothesisValidationState state);
 
     // G2-2R pure selection helper. Candidate frame ids must already be
     // ordered by the caller's reference policy. Missing cache entries remain

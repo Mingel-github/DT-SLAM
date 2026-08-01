@@ -1,0 +1,22 @@
+{
+  "applied_rows": 43,
+  "candidate_created_mappoints": 223,
+  "candidate_features": 517,
+  "created_mappoints": 51990,
+  "fail_open_rows": 15,
+  "files": 3,
+  "initialization_rows": 3,
+  "keyframe_rows": 140,
+  "new_dynamic_flags": 294,
+  "rows": 143,
+  "states": {
+    "applied": 43,
+    "maximum_feature_fraction_fail_open": 3,
+    "no_candidates": 85,
+    "reference_unavailable_fail_open": 3,
+    "tracking_safeguard_fail_open": 9
+  },
+  "status": "PASS",
+  "vetoed_depth_features": 284,
+  "violations": []
+}

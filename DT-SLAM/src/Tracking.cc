@@ -343,6 +343,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mbGeometrySparseFlowMapQualityAuditEnabled(false),
     mbGeometryLocalRigidityShadowEnabled(false),
     mnGeometryLocalRigidityComputedFrames(0),
+    mbGeometryRigidHypothesisShadowEnabled(false),
+    mnGeometryRigidHypothesisComputedFrames(0),
     mbGeometryRegionEvidenceShadowEnabled(false),
     mbGeometryRegionRiskDiagnosticsEnabled(false),
     mbGeometryLowResolutionRegionShadowEnabled(false),
@@ -798,6 +800,21 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             "Geometry.LocalRigidityShadowEnable=1 requires "
             "Geometry.SparseEgoFlowShadowEnable=1");
     }
+    const cv::FileNode geometryRigidHypothesisEnableNode =
+        fSettings["Geometry.RigidHypothesisShadowEnable"];
+    if(!geometryRigidHypothesisEnableNode.empty())
+    {
+        mbGeometryRigidHypothesisShadowEnabled =
+            static_cast<int>(
+                geometryRigidHypothesisEnableNode)!=0;
+    }
+    if(mbGeometryRigidHypothesisShadowEnabled &&
+       !mbGeometryLocalRigidityShadowEnabled)
+    {
+        throw std::invalid_argument(
+            "Geometry.RigidHypothesisShadowEnable=1 requires "
+            "Geometry.LocalRigidityShadowEnable=1");
+    }
 
     const cv::FileNode jiGeometryEnableNode =
         fSettings["JiGeometry.Enable"];
@@ -1178,6 +1195,22 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             "G1-F1 tracking filter requires "
             "DT_SLAM_GEOMETRY_TRACKING_FILTER_CSV");
     }
+    const char *removedAssociationCsv =
+        std::getenv(
+            "DT_SLAM_GEOMETRY_TRACKING_FILTER_FEATURE_CSV");
+    if(removedAssociationCsv && removedAssociationCsv[0]!='\0')
+    {
+        mGeometrySparseFlowRemovedAssociationCsvPath =
+            removedAssociationCsv;
+    }
+    const char *candidateAssociationCsv =
+        std::getenv(
+            "DT_SLAM_GEOMETRY_TRACKING_FILTER_CANDIDATE_CSV");
+    if(candidateAssociationCsv && candidateAssociationCsv[0]!='\0')
+    {
+        mGeometrySparseFlowCandidateAssociationCsvPath =
+            candidateAssociationCsv;
+    }
     const char *mappingCounterfactualCsv =
         std::getenv(
             "DT_SLAM_GEOMETRY_MAPPING_COUNTERFACTUAL_CSV");
@@ -1228,6 +1261,16 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             ParseFrameIdFilter(
                 std::getenv(
                     "DT_SLAM_GEOMETRY_LOCAL_RIGIDITY_FRAME_IDS"));
+    }
+    const char *rigidHypothesisCsv =
+        std::getenv("DT_SLAM_GEOMETRY_RIGID_HYPOTHESIS_CSV");
+    if(rigidHypothesisCsv && rigidHypothesisCsv[0]!='\0')
+    {
+        mGeometryRigidHypothesisCsvPath = rigidHypothesisCsv;
+        mGeometryRigidHypothesisFrameFilter =
+            ParseFrameIdFilter(
+                std::getenv(
+                    "DT_SLAM_GEOMETRY_RIGID_HYPOTHESIS_FRAME_IDS"));
     }
     const char *referenceSelectionCsv =
         std::getenv("DT_SLAM_GEOMETRY_REFERENCE_SELECTION_CSV");
@@ -1429,6 +1472,26 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         cout << "- G2-4F1 sparse ego-flow shadow: "
              << (mbGeometrySparseEgoFlowShadowEnabled
                      ? "enabled" : "disabled") << endl;
+        cout << "- G2-4F3 local rigidity shadow: "
+             << (mbGeometryLocalRigidityShadowEnabled
+                     ? "enabled" : "disabled") << endl;
+        cout << "- G2-MH1 local 3-D rigid hypotheses: "
+             << (mbGeometryRigidHypothesisShadowEnabled
+                     ? "enabled" : "disabled") << endl;
+        if(mbGeometryRigidHypothesisShadowEnabled)
+        {
+            cout << "- G2-MH1 local point count: 7" << endl;
+            cout << "- motion-group independent local validation "
+                 << "point count: 7" << endl;
+            cout << "- G2-MH1 output: continuous hypothesis fit; "
+                 << "dynamic_decision=none; "
+                 << "direct_slam_state_mutation=none" << endl;
+            if(!mGeometryRigidHypothesisCsvPath.empty())
+            {
+                cout << "- G2-MH1 diagnostics: "
+                     << mGeometryRigidHypothesisCsvPath << endl;
+            }
+        }
         cout << "- G1-F0B association counterfactual snapshots: "
              << (mbGeometrySparseFlowCounterfactualShadowEnabled
                      ? "enabled" : "disabled") << endl;
@@ -1456,6 +1519,18 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
                  << endl;
             cout << "- G1-F1 output: "
                  << mGeometrySparseFlowTrackingFilterCsvPath << endl;
+            if(!mGeometrySparseFlowRemovedAssociationCsvPath.empty())
+            {
+                cout << "- G1-F1 exact removed-association audit: "
+                     << mGeometrySparseFlowRemovedAssociationCsvPath
+                     << endl;
+            }
+            if(!mGeometrySparseFlowCandidateAssociationCsvPath.empty())
+            {
+                cout << "- G1-F1 post-search candidate-association audit: "
+                     << mGeometrySparseFlowCandidateAssociationCsvPath
+                     << endl;
+            }
             cout << "- G1-F1 scope: TrackLocalMap associations only; "
                  << "pose_reoptimization=none; mapping_veto=none"
                  << endl;
@@ -1941,7 +2016,8 @@ void Tracking::SaveGeometryPoseDiagnostics()
                 << "frame,timestamp,reference_frame,"
                 << "reference_timestamp,dt_seconds,feature_index,"
                 << "u_current,v_current,octave,has_mappoint,"
-                << "semantic_nonzero,backward_lk_status,"
+                << "semantic_nonzero,quality_eligible,q_candidate,"
+                << "normalized_residual_q,backward_lk_status,"
                 << "forward_lk_status,u_reference,v_reference,"
                 << "u_forward_back,v_forward_back,"
                 << "lk_error_backward,lk_error_forward,"
@@ -1992,6 +2068,11 @@ void Tracking::SaveGeometryPoseDiagnostics()
                        << record.octave << ","
                        << (record.hasMapPoint ? 1 : 0) << ","
                        << (record.semanticNonzero ? 1 : 0) << ","
+                       << (record.qualityEligible ? 1 : 0) << ","
+                       << (record.candidate ? 1 : 0) << ",";
+                if(std::isfinite(record.normalizedResidualQ))
+                    stream << record.normalizedResidualQ;
+                stream << ","
                        << (sample.backwardLkValid ? 1 : 0) << ","
                        << (sample.forwardLkValid ? 1 : 0) << ",";
                 if(sample.backwardLkValid)
@@ -2284,6 +2365,101 @@ void Tracking::SaveGeometryPoseDiagnostics()
                         size()
                  << " tracking-filter frame rows to "
                  << mGeometrySparseFlowTrackingFilterCsvPath
+                 << endl;
+        }
+    }
+
+    if(!mGeometrySparseFlowRemovedAssociationCsvPath.empty())
+    {
+        ofstream stream(
+            mGeometrySparseFlowRemovedAssociationCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G1-F1] failed to open exact removed-"
+                 << "association CSV: "
+                 << mGeometrySparseFlowRemovedAssociationCsvPath
+                 << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,feature_index,u,v,mappoint_id,"
+                << "q_threshold,frame_scale_px,semantic_dynamic,"
+                << "filter_state,direct_slam_state_mutation\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometrySparseFlowRemovedAssociationDiagnostics.
+                        size(); ++index)
+            {
+                const GeometrySparseFlowRemovedAssociationRecord &record =
+                    mvGeometrySparseFlowRemovedAssociationDiagnostics[
+                        index];
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.featureIndex << ","
+                       << record.pixelX << ","
+                       << record.pixelY << ","
+                       << record.mapPointId << ","
+                       << record.qThreshold << ","
+                       << record.frameScalePixels << ","
+                       << (record.semanticDynamic ? 1 : 0)
+                       << ",applied,association_removed\n";
+            }
+            stream.close();
+            cout << "[Geometry G1-F1] saved "
+                 << mvGeometrySparseFlowRemovedAssociationDiagnostics.
+                        size()
+                 << " exact removed-association rows to "
+                 << mGeometrySparseFlowRemovedAssociationCsvPath
+                 << endl;
+        }
+    }
+
+    if(!mGeometrySparseFlowCandidateAssociationCsvPath.empty())
+    {
+        ofstream stream(
+            mGeometrySparseFlowCandidateAssociationCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G1-F1] failed to open post-search "
+                 << "candidate-association CSV: "
+                 << mGeometrySparseFlowCandidateAssociationCsvPath
+                 << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,feature_index,u,v,mappoint_id,"
+                << "q_threshold,frame_scale_px,semantic_dynamic,"
+                << "removed,filter_state\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<
+                    mvGeometrySparseFlowCandidateAssociationDiagnostics.
+                        size(); ++index)
+            {
+                const GeometrySparseFlowCandidateAssociationRecord &record =
+                    mvGeometrySparseFlowCandidateAssociationDiagnostics[
+                        index];
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.featureIndex << ","
+                       << record.pixelX << ","
+                       << record.pixelY << ","
+                       << record.mapPointId << ","
+                       << record.qThreshold << ","
+                       << record.frameScalePixels << ","
+                       << (record.semanticDynamic ? 1 : 0) << ","
+                       << (record.removed ? 1 : 0) << ","
+                       << record.filterState << "\n";
+            }
+            stream.close();
+            cout << "[Geometry G1-F1] saved "
+                 << mvGeometrySparseFlowCandidateAssociationDiagnostics.
+                        size()
+                 << " post-search candidate-association rows to "
+                 << mGeometrySparseFlowCandidateAssociationCsvPath
                  << endl;
         }
     }
@@ -2899,6 +3075,201 @@ void Tracking::SaveGeometryPoseDiagnostics()
         }
     }
 
+    if(!mGeometryRigidHypothesisCsvPath.empty() &&
+       !mvGeometryRigidHypothesisDiagnostics.empty())
+    {
+        ofstream stream(mGeometryRigidHypothesisCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-MH1] failed to open hypothesis CSV: "
+                 << mGeometryRigidHypothesisCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,reference_frame,"
+                << "reference_timestamp,dt_seconds,anchor_feature_index,"
+                << "u_current,v_current,u_reference,v_reference,"
+                << "member_feature_indices,member_count,"
+                << "validation_feature_indices,validation_count,"
+                << "h00,h01,h02,h03,h10,h11,h12,h13,"
+                << "h20,h21,h22,h23,"
+                << "local_fit_median_m,local_fit_rms_m,local_fit_p90_m,"
+                << "background_fit_median_m,background_fit_rms_m,"
+                << "background_fit_p90_m,median_improvement_m,"
+                << "background_to_local_rms_ratio,"
+                << "relative_translation_m,relative_rotation_rad,"
+                << "maximum_image_radius_px,reference_depth_span_m,"
+                << "current_depth_span_m,"
+                << "reference_second_to_first_singular_ratio,"
+                << "validation_local_fit_median_m,"
+                << "validation_local_fit_rms_m,"
+                << "validation_local_fit_p90_m,"
+                << "validation_background_fit_median_m,"
+                << "validation_background_fit_rms_m,"
+                << "validation_background_fit_p90_m,"
+                << "validation_median_improvement_m,"
+                << "validation_background_to_local_rms_ratio,"
+                << "validation_local_better_fraction,"
+                << "global_validation_count,global_local_better_count,"
+                << "global_local_better_fraction,"
+                << "global_median_improvement_m,"
+                << "evidence_state,validation_state,dynamic_decision,"
+                << "direct_slam_state_mutation\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<mvGeometryRigidHypothesisDiagnostics.size();
+                ++index)
+            {
+                const GeometryRigidHypothesisRecord &record =
+                    mvGeometryRigidHypothesisDiagnostics[index];
+                const GeometricRigidHypothesisSample &sample =
+                    record.sample;
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.referenceFrameId << ","
+                       << record.referenceTimestamp << ","
+                       << record.timestamp-
+                          record.referenceTimestamp << ","
+                       << sample.anchorFeatureIndex << ","
+                       << sample.anchorCurrentPixel.x << ","
+                       << sample.anchorCurrentPixel.y << ","
+                       << sample.anchorReferencePixel.x << ","
+                       << sample.anchorReferencePixel.y << ","
+                       << JoinDiagnosticValues(
+                              sample.memberFeatureIndices) << ","
+                       << sample.memberFeatureIndices.size() << ","
+                       << JoinDiagnosticValues(
+                              sample.validationFeatureIndices) << ","
+                       << sample.validationFeatureIndices.size() << ","
+                       << sample.referenceToCurrent(0,0) << ","
+                       << sample.referenceToCurrent(0,1) << ","
+                       << sample.referenceToCurrent(0,2) << ","
+                       << sample.referenceToCurrent(0,3) << ","
+                       << sample.referenceToCurrent(1,0) << ","
+                       << sample.referenceToCurrent(1,1) << ","
+                       << sample.referenceToCurrent(1,2) << ","
+                       << sample.referenceToCurrent(1,3) << ","
+                       << sample.referenceToCurrent(2,0) << ","
+                       << sample.referenceToCurrent(2,1) << ","
+                       << sample.referenceToCurrent(2,2) << ","
+                       << sample.referenceToCurrent(2,3) << ","
+                       << sample.localFitMedianMeters << ","
+                       << sample.localFitRmsMeters << ","
+                       << sample.localFitP90Meters << ","
+                       << sample.backgroundFitMedianMeters << ","
+                       << sample.backgroundFitRmsMeters << ","
+                       << sample.backgroundFitP90Meters << ","
+                       << sample.medianImprovementMeters << ","
+                       << sample.backgroundToLocalRmsRatio << ","
+                       << sample.relativeTranslationMeters << ","
+                       << sample.relativeRotationRadians << ","
+                       << sample.maximumImageRadiusPixels << ","
+                       << sample.referenceDepthSpanMeters << ","
+                       << sample.currentDepthSpanMeters << ","
+                       << sample.referenceSecondToFirstSingularRatio
+                       << ","
+                       << sample.validationLocalFitMedianMeters << ","
+                       << sample.validationLocalFitRmsMeters << ","
+                       << sample.validationLocalFitP90Meters << ","
+                       << sample.validationBackgroundFitMedianMeters
+                       << ","
+                       << sample.validationBackgroundFitRmsMeters
+                       << ","
+                       << sample.validationBackgroundFitP90Meters
+                       << ","
+                       << sample.validationMedianImprovementMeters
+                       << ","
+                       << sample.
+                          validationBackgroundToLocalRmsRatio << ","
+                       << sample.validationLocalBetterFraction << ","
+                       << sample.globalValidationCount << ","
+                       << sample.globalLocalBetterCount << ","
+                       << sample.globalLocalBetterFraction << ","
+                       << sample.globalMedianImprovementMeters << ","
+                       << GeometricDynamicDetector::
+                          RigidHypothesisStateName(sample.state)
+                       << ","
+                       << GeometricDynamicDetector::
+                          RigidHypothesisValidationStateName(
+                              sample.validationState)
+                       << ",none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-MH1] saved "
+                 << mvGeometryRigidHypothesisDiagnostics.size()
+                 << " hypothesis rows to "
+                 << mGeometryRigidHypothesisCsvPath << endl;
+        }
+    }
+
+    if(!mGeometryRigidHypothesisCsvPath.empty() &&
+       !mvGeometryRigidHypothesisFrameDiagnostics.empty())
+    {
+        const std::string frameCsvPath =
+            mGeometryRigidHypothesisCsvPath+".frames.csv";
+        ofstream stream(frameCsvPath.c_str());
+        if(!stream.is_open())
+        {
+            cerr << "[Geometry G2-MH1] failed to open frame CSV: "
+                 << frameCsvPath << endl;
+        }
+        else
+        {
+            stream
+                << "frame,timestamp,reference_frame,"
+                << "reference_timestamp,dt_seconds,"
+                << "reference_available,domain_valid,input_nodes,"
+                << "eligible_nodes,valid_hypotheses,"
+                << "insufficient_local_support,degenerate_geometry,"
+                << "numeric_failure,local_point_count,"
+                << "local_validation_point_count,valid_validations,"
+                << "insufficient_validation_support,"
+                << "numeric_validation_failure,"
+                << "neighbor_search_ms,fit_ms,support_evaluation_ms,"
+                << "total_ms,"
+                << "dynamic_decision,direct_slam_state_mutation\n";
+            stream << std::setprecision(15);
+            for(std::size_t index=0;
+                index<mvGeometryRigidHypothesisFrameDiagnostics.size();
+                ++index)
+            {
+                const GeometryRigidHypothesisFrameRecord &record =
+                    mvGeometryRigidHypothesisFrameDiagnostics[index];
+                const GeometricRigidHypothesisStats &stats =
+                    record.stats;
+                stream << record.frameId << ","
+                       << record.timestamp << ","
+                       << record.referenceFrameId << ","
+                       << record.referenceTimestamp << ","
+                       << record.timestamp-
+                          record.referenceTimestamp << ","
+                       << (record.referenceAvailable ? 1 : 0) << ","
+                       << (record.domainValid ? 1 : 0) << ","
+                       << stats.inputNodeCount << ","
+                       << stats.eligibleNodeCount << ","
+                       << stats.validHypothesisCount << ","
+                       << stats.insufficientLocalSupportCount << ","
+                       << stats.degenerateGeometryCount << ","
+                       << stats.numericFailureCount << ","
+                       << stats.localPointCount << ","
+                       << stats.localValidationPointCount << ","
+                       << stats.validValidationCount << ","
+                       << stats.insufficientValidationSupportCount
+                       << ","
+                       << stats.numericValidationFailureCount << ","
+                       << stats.neighborSearchMs << ","
+                       << stats.fitMs << ","
+                       << stats.supportEvaluationMs << ","
+                       << stats.totalMs << ",none,none\n";
+            }
+            stream.close();
+            cout << "[Geometry G2-MH1] saved "
+                 << mvGeometryRigidHypothesisFrameDiagnostics.size()
+                 << " frame rows to " << frameCsvPath << endl;
+        }
+    }
+
     if(!mGeometryRegionEvidenceCsvPath.empty() &&
        !mvGeometryRegionEvidenceDiagnostics.empty())
     {
@@ -3281,6 +3652,8 @@ void Tracking::SaveGeometryPoseDiagnostics()
     mvGeometrySparseFlowFrameDiagnostics.clear();
     mvGeometryAssociationSnapshotDiagnostics.clear();
     mvGeometrySparseFlowTrackingFilterDiagnostics.clear();
+    mvGeometrySparseFlowRemovedAssociationDiagnostics.clear();
+    mvGeometrySparseFlowCandidateAssociationDiagnostics.clear();
     mvGeometrySparseFlowMappingAdmissionDiagnostics.clear();
     mvGeometrySparseFlowMappingFilterDiagnostics.clear();
     mvGeometrySparseFlowCandidateMapPoints.clear();
@@ -3500,6 +3873,8 @@ void Tracking::RunSparseEgoFlowShadow()
 {
     mCurrentSparseFlowFilterResult =
         GeometricSparseFlowFilterResult();
+    mCurrentSparseFlowFilterResult.qualityEligibleMask.assign(
+        static_cast<std::size_t>(mCurrentFrame.N),0);
     mCurrentSparseFlowFilterResult.candidateMask.assign(
         static_cast<std::size_t>(mCurrentFrame.N),0);
     mvbCurrentSparseFlowRemovedAssociations.assign(
@@ -3626,6 +4001,38 @@ void Tracking::RunSparseEgoFlowShadow()
         }
     }
 
+    GeometricRigidHypothesisResult rigidHypothesisResult;
+    if(mbGeometryRigidHypothesisShadowEnabled)
+    {
+        if(referenceAvailable && domainValid &&
+           !mSparseFlowReference.TcwFinal.empty())
+        {
+            rigidHypothesisResult =
+                GeometricDynamicDetector::ComputeLocalRigidHypotheses(
+                    rigidityResult,
+                    mSparseFlowReference.TcwFinal,
+                    mCurrentFrame.mTcw,7);
+        }
+        else
+        {
+            rigidHypothesisResult.stats.inputNodeCount =
+                rigidityResult.nodes.size();
+            rigidHypothesisResult.stats.localPointCount = 7;
+            rigidHypothesisResult.stats.localValidationPointCount = 7;
+            rigidHypothesisResult.hypotheses.resize(
+                rigidityResult.nodes.size());
+            for(std::size_t index=0;
+                index<rigidityResult.nodes.size(); ++index)
+            {
+                rigidHypothesisResult.hypotheses[index].
+                    anchorFeatureIndex =
+                        rigidityResult.nodes[index].featureIndex;
+                rigidHypothesisResult.hypotheses[index].state =
+                    GeometricRigidHypothesisState::SparseFlowInvalid;
+            }
+        }
+    }
+
     const bool recordFeatures =
         !mGeometrySparseFlowCsvPath.empty() &&
         (mGeometrySparseFlowFrameFilter.empty() ||
@@ -3656,6 +4063,26 @@ void Tracking::RunSparseEgoFlowShadow()
             record.semanticNonzero =
                 index<mCurrentFrame.mvbSemanticDynamic.size() &&
                 mCurrentFrame.mvbSemanticDynamic[index]!=0;
+            record.qualityEligible =
+                index<
+                    mCurrentSparseFlowFilterResult.
+                        qualityEligibleMask.size() &&
+                mCurrentSparseFlowFilterResult.
+                    qualityEligibleMask[index]!=0;
+            record.candidate =
+                index<
+                    mCurrentSparseFlowFilterResult.
+                        candidateMask.size() &&
+                mCurrentSparseFlowFilterResult.
+                    candidateMask[index]!=0;
+            record.normalizedResidualQ =
+                record.qualityEligible &&
+                mCurrentSparseFlowFilterResult.scaleValid
+                ? result.samples[index].
+                    slamResidualMagnitudePixels/
+                    mCurrentSparseFlowFilterResult.
+                        frameScalePixels
+                : std::numeric_limits<float>::quiet_NaN();
             record.sample = result.samples[index];
             mvGeometrySparseFlowFeatureDiagnostics.push_back(
                 record);
@@ -3736,6 +4163,31 @@ void Tracking::RunSparseEgoFlowShadow()
                 record);
         }
     }
+    const bool recordRigidHypotheses =
+        mbGeometryRigidHypothesisShadowEnabled &&
+        !mGeometryRigidHypothesisCsvPath.empty() &&
+        (mGeometryRigidHypothesisFrameFilter.empty() ||
+         mGeometryRigidHypothesisFrameFilter.count(
+             mCurrentFrame.mnId)>0);
+    if(recordRigidHypotheses)
+    {
+        for(std::size_t index=0;
+            index<rigidHypothesisResult.hypotheses.size(); ++index)
+        {
+            GeometryRigidHypothesisRecord record;
+            record.frameId = mCurrentFrame.mnId;
+            record.timestamp = mCurrentFrame.mTimeStamp;
+            record.referenceFrameId =
+                referenceAvailable
+                ? mSparseFlowReference.frameId : 0;
+            record.referenceTimestamp =
+                referenceAvailable
+                ? mSparseFlowReference.timestamp : 0.0;
+            record.sample =
+                rigidHypothesisResult.hypotheses[index];
+            mvGeometryRigidHypothesisDiagnostics.push_back(record);
+        }
+    }
     const double recordMs =
         std::chrono::duration<double,std::milli>(
             std::chrono::steady_clock::now()-recordStart).count();
@@ -3778,6 +4230,24 @@ void Tracking::RunSparseEgoFlowShadow()
         frameRecord.domainValid = domainValid;
         frameRecord.stats = rigidityResult.stats;
         mvGeometryLocalRigidityFrameDiagnostics.push_back(
+            frameRecord);
+    }
+    if(mbGeometryRigidHypothesisShadowEnabled &&
+       !mGeometryRigidHypothesisCsvPath.empty())
+    {
+        GeometryRigidHypothesisFrameRecord frameRecord;
+        frameRecord.frameId = mCurrentFrame.mnId;
+        frameRecord.timestamp = mCurrentFrame.mTimeStamp;
+        frameRecord.referenceFrameId =
+            referenceAvailable
+            ? mSparseFlowReference.frameId : 0;
+        frameRecord.referenceTimestamp =
+            referenceAvailable
+            ? mSparseFlowReference.timestamp : 0.0;
+        frameRecord.referenceAvailable = referenceAvailable;
+        frameRecord.domainValid = domainValid;
+        frameRecord.stats = rigidHypothesisResult.stats;
+        mvGeometryRigidHypothesisFrameDiagnostics.push_back(
             frameRecord);
     }
 
@@ -3842,6 +4312,49 @@ void Tracking::RunSparseEgoFlowShadow()
                  << endl;
         }
     }
+    if(mbGeometryRigidHypothesisShadowEnabled)
+    {
+        ++mnGeometryRigidHypothesisComputedFrames;
+        if(mnGeometryRigidHypothesisComputedFrames==1 ||
+           mnGeometryRigidHypothesisComputedFrames%
+               static_cast<long unsigned int>(
+                   mnGeometryLogEveryN)==0)
+        {
+            cout << "[Geometry G2-MH1] frame="
+                 << mCurrentFrame.mnId
+                 << " eligible_nodes="
+                 << rigidHypothesisResult.stats.eligibleNodeCount
+                 << " valid_hypotheses="
+                 << rigidHypothesisResult.stats.validHypothesisCount
+                 << " valid_validations="
+                 << rigidHypothesisResult.stats.validValidationCount
+                 << " insufficient="
+                 << rigidHypothesisResult.stats.
+                    insufficientLocalSupportCount
+                 << " degenerate="
+                 << rigidHypothesisResult.stats.
+                    degenerateGeometryCount
+                 << " numeric_failure="
+                 << rigidHypothesisResult.stats.numericFailureCount
+                 << " validation_insufficient="
+                 << rigidHypothesisResult.stats.
+                    insufficientValidationSupportCount
+                 << " validation_numeric_failure="
+                 << rigidHypothesisResult.stats.
+                    numericValidationFailureCount
+                 << " neighbor_ms="
+                 << rigidHypothesisResult.stats.neighborSearchMs
+                 << " fit_ms="
+                 << rigidHypothesisResult.stats.fitMs
+                 << " support_ms="
+                 << rigidHypothesisResult.stats.supportEvaluationMs
+                 << " total_ms="
+                 << rigidHypothesisResult.stats.totalMs
+                 << " dynamic_decision=none"
+                 << " direct_slam_state_mutation=none"
+                 << endl;
+        }
+    }
 }
 
 int Tracking::ApplySparseFlowTrackingFilter()
@@ -3894,6 +4407,11 @@ int Tracking::ApplySparseFlowTrackingFilter()
         return 0;
     }
 
+    std::vector<GeometrySparseFlowCandidateAssociationRecord>
+        candidateAssociationRecords;
+    std::vector<std::size_t> candidateAssociationRecordIndices(
+        count,std::numeric_limits<std::size_t>::max());
+
     for(std::size_t index=0; index<count; ++index)
     {
         MapPoint *mapPoint =
@@ -3905,6 +4423,34 @@ int Tracking::ApplySparseFlowTrackingFilter()
                candidateMask[index]!=0)
         {
             ++record.candidateAssociations;
+            if(!mGeometrySparseFlowCandidateAssociationCsvPath.empty())
+            {
+                GeometrySparseFlowCandidateAssociationRecord
+                    candidateRecord;
+                candidateRecord.frameId = mCurrentFrame.mnId;
+                candidateRecord.timestamp =
+                    mCurrentFrame.mTimeStamp;
+                candidateRecord.featureIndex = index;
+                candidateRecord.pixelX =
+                    mCurrentFrame.mvKeys[index].pt.x;
+                candidateRecord.pixelY =
+                    mCurrentFrame.mvKeys[index].pt.y;
+                candidateRecord.mapPointId = mapPoint->mnId;
+                candidateRecord.qThreshold =
+                    mfGeometrySparseFlowTrackingFilterQ;
+                candidateRecord.frameScalePixels =
+                    mCurrentSparseFlowFilterResult.
+                        frameScalePixels;
+                candidateRecord.semanticDynamic =
+                    index<mCurrentFrame.mvbSemanticDynamic.size() &&
+                    mCurrentFrame.mvbSemanticDynamic[index]!=0;
+                candidateRecord.removed = false;
+                candidateRecord.filterState = "unknown";
+                candidateAssociationRecordIndices[index] =
+                    candidateAssociationRecords.size();
+                candidateAssociationRecords.push_back(
+                    candidateRecord);
+            }
         }
     }
     record.remainingAssociations =
@@ -3947,10 +4493,41 @@ int Tracking::ApplySparseFlowTrackingFilter()
                 mCurrentFrame.mvpMapPoints[index];
             if(!mapPoint || mapPoint->isBad())
                 continue;
+            if(!mGeometrySparseFlowRemovedAssociationCsvPath.empty())
+            {
+                GeometrySparseFlowRemovedAssociationRecord
+                    removedRecord;
+                removedRecord.frameId = mCurrentFrame.mnId;
+                removedRecord.timestamp =
+                    mCurrentFrame.mTimeStamp;
+                removedRecord.featureIndex = index;
+                removedRecord.pixelX =
+                    mCurrentFrame.mvKeys[index].pt.x;
+                removedRecord.pixelY =
+                    mCurrentFrame.mvKeys[index].pt.y;
+                removedRecord.mapPointId = mapPoint->mnId;
+                removedRecord.qThreshold =
+                    mfGeometrySparseFlowTrackingFilterQ;
+                removedRecord.frameScalePixels =
+                    mCurrentSparseFlowFilterResult.frameScalePixels;
+                removedRecord.semanticDynamic =
+                    index<mCurrentFrame.mvbSemanticDynamic.size() &&
+                    mCurrentFrame.mvbSemanticDynamic[index]!=0;
+                mvGeometrySparseFlowRemovedAssociationDiagnostics.
+                    push_back(removedRecord);
+            }
             mCurrentFrame.mvpMapPoints[index] =
                 static_cast<MapPoint*>(NULL);
             mCurrentFrame.mvbOutlier[index] = false;
             mvbCurrentSparseFlowRemovedAssociations[index] = 1;
+            const std::size_t candidateRecordIndex =
+                candidateAssociationRecordIndices[index];
+            if(candidateRecordIndex!=
+                   std::numeric_limits<std::size_t>::max())
+            {
+                candidateAssociationRecords[
+                    candidateRecordIndex].removed = true;
+            }
             ++record.removedAssociations;
         }
         record.remainingAssociations =
@@ -3960,6 +4537,15 @@ int Tracking::ApplySparseFlowTrackingFilter()
         record.state =
             record.applied ? "applied" :
                 "no_candidate_association";
+    }
+
+    for(std::size_t index=0;
+        index<candidateAssociationRecords.size(); ++index)
+    {
+        candidateAssociationRecords[index].filterState =
+            record.state;
+        mvGeometrySparseFlowCandidateAssociationDiagnostics.
+            push_back(candidateAssociationRecords[index]);
     }
 
     mbCurrentSparseFlowTrackingSafeguardsPassed =
@@ -7519,6 +8105,8 @@ void Tracking::Reset()
     mvGeometrySparseFlowFrameDiagnostics.clear();
     mvGeometryAssociationSnapshotDiagnostics.clear();
     mvGeometrySparseFlowTrackingFilterDiagnostics.clear();
+    mvGeometrySparseFlowRemovedAssociationDiagnostics.clear();
+    mvGeometrySparseFlowCandidateAssociationDiagnostics.clear();
     mvGeometrySparseFlowMappingAdmissionDiagnostics.clear();
     mvGeometrySparseFlowMappingFilterDiagnostics.clear();
     mvGeometrySparseFlowCandidateMapPoints.clear();
@@ -7531,6 +8119,8 @@ void Tracking::Reset()
     mvGeometryLocalRigidityNodeDiagnostics.clear();
     mvGeometryLocalRigidityEdgeDiagnostics.clear();
     mvGeometryLocalRigidityFrameDiagnostics.clear();
+    mvGeometryRigidHypothesisDiagnostics.clear();
+    mvGeometryRigidHypothesisFrameDiagnostics.clear();
     mvGeometryRegionEvidenceDiagnostics.clear();
     mvGeometryReferenceSelectionDiagnostics.clear();
     mqGeometryKeyframeReferences.clear();
@@ -7543,6 +8133,7 @@ void Tracking::Reset()
     mnGeometryMultiReferenceComputedFrames = 0;
     mnGeometrySparseFlowComputedFrames = 0;
     mnGeometryLocalRigidityComputedFrames = 0;
+    mnGeometryRigidHypothesisComputedFrames = 0;
     mnGeometryRegionEvidenceComputedFrames = 0;
 
     if(mpInitializer)

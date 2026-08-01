@@ -354,6 +354,8 @@ protected:
     int mnGeometrySparseFlowTrackingFilterMinimumAssociations;
     std::size_t mnGeometrySparseFlowTrackingFilterMinimumScaleSupport;
     std::string mGeometrySparseFlowTrackingFilterCsvPath;
+    std::string mGeometrySparseFlowRemovedAssociationCsvPath;
+    std::string mGeometrySparseFlowCandidateAssociationCsvPath;
     GeometricSparseFlowFilterResult mCurrentSparseFlowFilterResult;
     std::vector<unsigned char>
         mvbCurrentSparseFlowRemovedAssociations;
@@ -381,6 +383,44 @@ protected:
     };
     std::vector<GeometrySparseFlowTrackingFilterRecord>
         mvGeometrySparseFlowTrackingFilterDiagnostics;
+
+    // Optional, default-off spatial audit of the exact MapPoint
+    // associations removed by G1-F1. This records the existing decision
+    // without changing candidate generation or filter safeguards.
+    struct GeometrySparseFlowRemovedAssociationRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::size_t featureIndex;
+        float pixelX;
+        float pixelY;
+        long unsigned int mapPointId;
+        float qThreshold;
+        float frameScalePixels;
+        bool semanticDynamic;
+    };
+    std::vector<GeometrySparseFlowRemovedAssociationRecord>
+        mvGeometrySparseFlowRemovedAssociationDiagnostics;
+
+    // Optional post-SearchLocalPoints audit of every q-threshold candidate
+    // that had a valid MapPoint association before G1-F1 decided to apply
+    // or fail open.
+    struct GeometrySparseFlowCandidateAssociationRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        std::size_t featureIndex;
+        float pixelX;
+        float pixelY;
+        long unsigned int mapPointId;
+        float qThreshold;
+        float frameScalePixels;
+        bool semanticDynamic;
+        bool removed;
+        std::string filterState;
+    };
+    std::vector<GeometrySparseFlowCandidateAssociationRecord>
+        mvGeometrySparseFlowCandidateAssociationDiagnostics;
 
     // G1-M0 default-off, read-only audit of q10 candidate admission into
     // RGB-D initialization and Tracking-side KeyFrame MapPoint creation.
@@ -520,6 +560,9 @@ protected:
         int octave;
         bool hasMapPoint;
         bool semanticNonzero;
+        bool qualityEligible;
+        bool candidate;
+        float normalizedResidualQ;
         GeometricSparseFlowSample sample;
     };
     std::vector<GeometrySparseFlowFeatureRecord>
@@ -581,6 +624,37 @@ protected:
     };
     std::vector<GeometryLocalRigidityFrameRecord>
         mvGeometryLocalRigidityFrameDiagnostics;
+
+    // G2-MH1 adjacent-frame local 3-D rigid hypotheses. Shadow-only:
+    // no hypothesis threshold, cluster label, dynamic class, or mutation.
+    bool mbGeometryRigidHypothesisShadowEnabled;
+    std::string mGeometryRigidHypothesisCsvPath;
+    std::set<long unsigned int> mGeometryRigidHypothesisFrameFilter;
+    long unsigned int mnGeometryRigidHypothesisComputedFrames;
+
+    struct GeometryRigidHypothesisRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        long unsigned int referenceFrameId;
+        double referenceTimestamp;
+        GeometricRigidHypothesisSample sample;
+    };
+    std::vector<GeometryRigidHypothesisRecord>
+        mvGeometryRigidHypothesisDiagnostics;
+
+    struct GeometryRigidHypothesisFrameRecord
+    {
+        long unsigned int frameId;
+        double timestamp;
+        long unsigned int referenceFrameId;
+        double referenceTimestamp;
+        bool referenceAvailable;
+        bool domainValid;
+        GeometricRigidHypothesisStats stats;
+    };
+    std::vector<GeometryRigidHypothesisFrameRecord>
+        mvGeometryRigidHypothesisFrameDiagnostics;
 
     // G2-3R1 fixed-region evidence distributions. Shadow-only.
     bool mbGeometryRegionEvidenceShadowEnabled;
