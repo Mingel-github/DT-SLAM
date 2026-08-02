@@ -1,0 +1,62 @@
+%YAML:1.0
+
+# Gazebo RGB-D configuration for the frozen sparse ego-flow frontend.
+Camera.fx: 554.3827128226441
+Camera.fy: 554.3827128226441
+Camera.cx: 320.5
+Camera.cy: 240.5
+
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.k3: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 20.0
+Camera.bf: 40.0
+Camera.RGB: 1
+
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 1
+Geometry.SingleReferenceShadowEnable: 0
+Geometry.MultiReferenceShadowEnable: 0
+Geometry.SparseEgoFlowShadowEnable: 1
+Geometry.SparseFlowTrackingFilterEnable: 0
+Geometry.SparseFlowTrackingFilterQ: 10.0
+Geometry.SparseFlowTrackingFilterMaximumAssociationFraction: 0.05
+Geometry.SparseFlowTrackingFilterMinimumAssociations: 30
+Geometry.SparseFlowTrackingFilterMinimumScaleSupport: 20
+Geometry.SparseFlowMappingCounterfactualEnable: 0
+Geometry.SparseFlowMappingFilterEnable: 0
+Geometry.SparseFlowMappingFilterMaximumFeatureFraction: 0.05
+Geometry.SparseFlowMappingFilterMaximumDepthFraction: 0.05
+Geometry.SparseFlowMappingFilterMinimumRemainingDepthFeatures: 100
+Geometry.SparseFlowMapQualityAuditEnable: 0
+Geometry.LocalRigidityShadowEnable: 0
+Geometry.LogEveryN: 30
+Geometry.ResidualThresholdM: 0.10
+Geometry.RegionGrowEnable: 0
+Geometry.DebugSave: 0
+Geometry.RegionEvidenceShadowEnable: 0
+Geometry.RegionRiskDiagnosticsEnable: 0
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500
