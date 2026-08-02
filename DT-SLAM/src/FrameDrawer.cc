@@ -30,7 +30,10 @@
 namespace ORB_SLAM2
 {
 
-FrameDrawer::FrameDrawer(Map* pMap):mpMap(pMap)
+FrameDrawer::FrameDrawer(Map* pMap):
+    N(0),mbOnlyTracking(false),mnTracked(0),
+    mnORBFeatures(0),mnSemanticFeatures(0),mnGeometryRemoved(0),
+    mpMap(pMap)
 {
     mState=Tracking::SYSTEM_NOT_READY;
     mIm = cv::Mat(480,640,CV_8UC3, cv::Scalar(0,0,0));
@@ -42,7 +45,9 @@ cv::Mat FrameDrawer::DrawFrame()
     vector<cv::KeyPoint> vIniKeys;
     vector<int> vMatches;
     vector<cv::KeyPoint> vCurrentKeys;
-    vector<bool> vbVO, vbMap;
+    vector<bool> vbMap;
+    vector<unsigned char> vbSemanticDynamic;
+    vector<unsigned char> vbGeometryTrackingRemoved;
     cv::Mat mask;
     int state;
 
@@ -66,8 +71,10 @@ cv::Mat FrameDrawer::DrawFrame()
         else if(mState==Tracking::OK)
         {
             vCurrentKeys = mvCurrentKeys;
-            vbVO = mvbVO;
             vbMap = mvbMap;
+            vbSemanticDynamic = mvbSemanticDynamic;
+            vbGeometryTrackingRemoved =
+                mvbGeometryTrackingRemoved;
         }
         else if(mState==Tracking::LOST)
         {
@@ -101,12 +108,18 @@ cv::Mat FrameDrawer::DrawFrame()
     else if(state==Tracking::OK)
     {
         mnTracked=0;
-        mnTrackedVO=0;
+        mnORBFeatures=static_cast<int>(vCurrentKeys.size());
+        mnSemanticFeatures=0;
+        mnGeometryRemoved=0;
         const float r = 5;
         const int n = vCurrentKeys.size();
+
+        // Keep the normal view deliberately simple: green means that the
+        // association survived tracking and is backed by an established
+        // MapPoint. VO-only and intermediate geometry states are hidden.
         for(int i=0;i<n;i++)
         {
-            if(vbVO[i] || vbMap[i])
+            if(i<static_cast<int>(vbMap.size()) && vbMap[i])
             {
                 cv::Point2f pt1,pt2;
                 pt1.x=vCurrentKeys[i].pt.x-r;
@@ -114,22 +127,44 @@ cv::Mat FrameDrawer::DrawFrame()
                 pt2.x=vCurrentKeys[i].pt.x+r;
                 pt2.y=vCurrentKeys[i].pt.y+r;
 
-                // DT-SLAM: mask上的特征点用红色标记（被过滤/在动态区域）
-                bool onMask = !mask.empty() &&
-                    (int)vCurrentKeys[i].pt.x>=0 && (int)vCurrentKeys[i].pt.x<mask.cols &&
-                    (int)vCurrentKeys[i].pt.y>=0 && (int)vCurrentKeys[i].pt.y<mask.rows &&
-                    mask.at<uchar>((int)vCurrentKeys[i].pt.y, (int)vCurrentKeys[i].pt.x) != 0;
+                const cv::Scalar green(0,255,0);
+                cv::rectangle(im,pt1,pt2,green);
+                cv::circle(im,vCurrentKeys[i].pt,2,green,-1);
+                mnTracked++;
+            }
+        }
 
-                cv::Scalar color = onMask ? cv::Scalar(0,0,255) :   // 红=动态区域
-                                  vbMap[i] ? cv::Scalar(0,255,0) :  // 绿=地图点匹配
-                                             cv::Scalar(255,0,0);   // 蓝=VO匹配
+        const auto drawFilteredPoint =
+            [&im](const cv::Point2f &point,const cv::Scalar &color)
+        {
+            cv::circle(im,point,3,color,-1);
+        };
 
-                cv::rectangle(im,pt1,pt2,color);
-                cv::circle(im,vCurrentKeys[i].pt,2,color,-1);
-                if(vbMap[i])
-                    mnTracked++;
-                else
-                    mnTrackedVO++;
+        // Red points show every extracted ORB feature covered by the
+        // semantic mask, including features whose associations were removed
+        // before FrameDrawer::Update().
+        for(int i=0;i<n;i++)
+        {
+            if(i<static_cast<int>(vbSemanticDynamic.size()) &&
+               vbSemanticDynamic[i]!=0)
+            {
+                drawFilteredPoint(
+                    vCurrentKeys[i].pt,cv::Scalar(0,0,255));
+                mnSemanticFeatures++;
+            }
+        }
+
+        // Yellow points show only associations that G1-F1 actually
+        // removed. Raw residual candidates and mapping-only diagnostics stay
+        // out of the normal viewer to avoid visual clutter.
+        for(int i=0;i<n;i++)
+        {
+            if(i<static_cast<int>(vbGeometryTrackingRemoved.size()) &&
+               vbGeometryTrackingRemoved[i]!=0)
+            {
+                drawFilteredPoint(
+                    vCurrentKeys[i].pt,cv::Scalar(0,255,255));
+                mnGeometryRemoved++;
             }
         }
     }
@@ -142,10 +177,10 @@ cv::Mat FrameDrawer::DrawFrame()
     }
     for (const auto& d : dets)
     {
-        cv::rectangle(im, d.box, cv::Scalar(0,255,0), 2);
+        cv::rectangle(im, d.box, cv::Scalar(0,0,255), 2);
         std::string label = cv::format("person %.2f", d.confidence);
         cv::putText(im, label, cv::Point(d.box.x, d.box.y - 5),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,255,0), 1);
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,255), 1);
     }
 
     cv::Mat imWithInfo;
@@ -170,9 +205,11 @@ void FrameDrawer::DrawTextInfo(cv::Mat &im, int nState, cv::Mat &imText)
             s << "LOCALIZATION | ";
         int nKFs = mpMap->KeyFramesInMap();
         int nMPs = mpMap->MapPointsInMap();
-        s << "KFs: " << nKFs << ", MPs: " << nMPs << ", Matches: " << mnTracked;
-        if(mnTrackedVO>0)
-            s << ", + VO matches: " << mnTrackedVO;
+        s << "KFs: " << nKFs << ", MPs: " << nMPs
+          << ", ORB: " << mnORBFeatures
+          << ", Matches: " << mnTracked
+          << ", Sem: " << mnSemanticFeatures
+          << ", Geo removed: " << mnGeometryRemoved;
     }
     else if(nState==Tracking::LOST)
     {
@@ -214,8 +251,15 @@ void FrameDrawer::Update(Tracking *pTracker)
     pTracker->mImGray.copyTo(mIm);
     mvCurrentKeys=pTracker->mCurrentFrame.mvKeys;
     N = mvCurrentKeys.size();
-    mvbVO = vector<bool>(N,false);
     mvbMap = vector<bool>(N,false);
+    mvbSemanticDynamic =
+        pTracker->mCurrentFrame.mvbSemanticDynamic;
+    if(mvbSemanticDynamic.size()!=static_cast<std::size_t>(N))
+        mvbSemanticDynamic.assign(N,0);
+    mvbGeometryTrackingRemoved =
+        pTracker->GetCurrentSparseFlowRemovedAssociations();
+    if(mvbGeometryTrackingRemoved.size()!=static_cast<std::size_t>(N))
+        mvbGeometryTrackingRemoved.assign(N,0);
     mbOnlyTracking = pTracker->mbOnlyTracking;
 
 
@@ -235,8 +279,6 @@ void FrameDrawer::Update(Tracking *pTracker)
                 {
                     if(pMP->Observations()>0)
                         mvbMap[i]=true;
-                    else
-                        mvbVO[i]=true;
                 }
             }
         }

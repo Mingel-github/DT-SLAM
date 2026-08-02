@@ -63,9 +63,12 @@ protected:
     std::vector<Detection> mDetections; // DT-SLAM: YOLO检测结果
     int N;
     vector<cv::KeyPoint> mvCurrentKeys;
-    vector<bool> mvbMap, mvbVO;
+    vector<bool> mvbMap;
+    vector<unsigned char> mvbSemanticDynamic;
+    vector<unsigned char> mvbGeometryTrackingRemoved;
     bool mbOnlyTracking;
-    int mnTracked, mnTrackedVO;
+    int mnTracked;
+    int mnORBFeatures, mnSemanticFeatures, mnGeometryRemoved;
     vector<cv::KeyPoint> mvIniKeys;
     vector<int> mvIniMatches;
     int mState;

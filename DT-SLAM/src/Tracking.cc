@@ -1734,6 +1734,12 @@ void Tracking::SetGroundTruthPoseForGeometry(const cv::Mat &TcwGroundTruth)
     TcwGroundTruth.convertTo(mCurrentGroundTruthTcw,CV_32F);
 }
 
+const std::vector<unsigned char>&
+Tracking::GetCurrentSparseFlowRemovedAssociations() const
+{
+    return mvbCurrentSparseFlowRemovedAssociations;
+}
+
 void Tracking::SaveGeometryPoseDiagnostics()
 {
     if(!mGeometryPoseDiagnosticCsvPath.empty() &&

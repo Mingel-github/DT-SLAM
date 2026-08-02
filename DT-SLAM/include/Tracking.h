@@ -99,6 +99,8 @@ public:
     cv::Mat GrabImageMonocular(const cv::Mat &im, const double &timestamp);
     void SetGroundTruthPoseForGeometry(const cv::Mat &TcwGroundTruth);
     void SaveGeometryPoseDiagnostics();
+    const std::vector<unsigned char>&
+        GetCurrentSparseFlowRemovedAssociations() const;
 
     void SetLocalMapper(LocalMapping* pLocalMapper);
     void SetLoopClosing(LoopClosing* pLoopClosing);
