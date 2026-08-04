@@ -128,6 +128,10 @@ public:
     int GetTrackingState();
     std::vector<MapPoint*> GetTrackedMapPoints();
     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
+    // S3 mapping-only outputs. Empty when disabled, unavailable, or tracking
+    // failed. Returned matrices are independent clones.
+    cv::Mat GetCurrentDynamicDepthMaskForMapping();
+    cv::Mat GetCurrentStaticDepthForMapping();
 
 private:
 
@@ -180,6 +184,8 @@ private:
     int mTrackingState;
     std::vector<MapPoint*> mTrackedMapPoints;
     std::vector<cv::KeyPoint> mTrackedKeyPointsUn;
+    cv::Mat mDynamicDepthMaskForMapping;
+    cv::Mat mStaticDepthForMapping;
     std::mutex mMutexState;
 };
 

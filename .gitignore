@@ -27,6 +27,11 @@ DT-SLAM/Examples/RGB-D/ji_geometry_test
 DT-SLAM/Examples/RGB-D/depth_region_partition_audit
 DT-SLAM/Examples/RGB-D/box_region_partition_audit
 DT-SLAM/Examples/RGB-D/semantic_review_export
+DT-SLAM/Examples/RGB-D/sin_style_shadow_test
+DT-SLAM/Examples/RGB-D/sin_style_dense_flow_replay_test
+DT-SLAM/Examples/RGB-D/sin_style_dense_flow_native_parity_test
+DT-SLAM/Examples/RGB-D/sin_style_region_dynamic_parity_test
+DT-SLAM/Examples/RGB-D/sin_style_depth_filter_test
 DT-SLAM/results/**/*.log
 DT-SLAM/results/**/*.txt
 results/**/*.csv
@@ -34,3 +39,6 @@ results/**/*.json
 results/**/*.log
 results/**/*.png
 results/**/*.txt
+results/**/*.ply
+results/**/*.pcd
+.local_sindslam_raw_export/

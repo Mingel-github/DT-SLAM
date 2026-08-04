@@ -90,6 +90,14 @@ src/YOLOSegment.cc
 src/GeometricDynamicDetector.cc
 src/JiGeometryBaseline.cc
 src/RGBDInputRectifier.cc
+src/SInStyleDynamicDetector.cc
+src/SInStyleInitialRegionClusterer.cc
+src/SInStyleGradientRegionSplitter.cc
+src/SInStylePlaneEdgeRegionSplitter.cc
+src/SInStyleRAGRegionMerger.cc
+src/SInStyleDenseFlowResidualEstimator.cc
+src/SInStyleRegionDynamicClassifier.cc
+src/SInStyleDepthFilter.cc
 )
 
 find_package(Threads REQUIRED)
@@ -130,6 +138,26 @@ target_link_libraries(box_region_partition_audit ${PROJECT_NAME})
 add_executable(ji_geometry_test
 Examples/RGB-D/ji_geometry_test.cc)
 target_link_libraries(ji_geometry_test ${PROJECT_NAME})
+
+add_executable(sin_style_shadow_test
+Examples/RGB-D/sin_style_shadow_test.cc)
+target_link_libraries(sin_style_shadow_test ${PROJECT_NAME})
+
+add_executable(sin_style_dense_flow_replay_test
+Examples/RGB-D/sin_style_dense_flow_replay_test.cc)
+target_link_libraries(sin_style_dense_flow_replay_test ${PROJECT_NAME})
+
+add_executable(sin_style_dense_flow_native_parity_test
+Examples/RGB-D/sin_style_dense_flow_native_parity_test.cc)
+target_link_libraries(sin_style_dense_flow_native_parity_test ${PROJECT_NAME})
+
+add_executable(sin_style_region_dynamic_parity_test
+Examples/RGB-D/sin_style_region_dynamic_parity_test.cc)
+target_link_libraries(sin_style_region_dynamic_parity_test ${PROJECT_NAME})
+
+add_executable(sin_style_depth_filter_test
+Examples/RGB-D/sin_style_depth_filter_test.cc)
+target_link_libraries(sin_style_depth_filter_test ${PROJECT_NAME})
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/Examples/Stereo)
 

@@ -1,0 +1,71 @@
+%YAML:1.0
+
+# TUM fr3 paired S1 audit: author SIn reference replay plus the clean-room
+# native initial 3D partition. Both paths are shadow-only.
+Camera.fx: 535.4
+Camera.fy: 539.2
+Camera.cx: 320.1
+Camera.cy: 247.6
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 0
+Geometry.LogEveryN: 30
+Geometry.ResidualThresholdM: 0.10
+Geometry.RegionGrowEnable: 0
+Geometry.RegionDepthThresholdM: 0.05
+Geometry.DebugSave: 0
+Geometry.DebugEveryN: 30
+
+# Override reference/input-output locations at runtime with:
+# DT_SLAM_SIN_REFERENCE_DIR, DT_SLAM_SIN_SHADOW_FRAME_CSV and
+# DT_SLAM_SIN_NATIVE_INITIAL_DIR.
+SInStyle.ShadowEnable: 1
+SInStyle.Backend: "reference_replay"
+SInStyle.ReferenceBackend: "brox_cuda"
+SInStyle.ReferenceDirectory: "."
+SInStyle.ReferenceMaskSuffix: "_mask_final.png"
+SInStyle.RequireLabels: 1
+SInStyle.LogEveryN: 10
+SInStyle.CsvPath: ""
+
+# [A] Clean-room SIn-style initial XYZ partition. This is not a dynamic
+# detector and does not reproduce the later edge split/RAG merge stages.
+SInStyle.NativeInitialRegionsEnable: 1
+SInStyle.NativeClusterPixelDivisor: 25600.0
+SInStyle.NativeMaximumDepthM: 6.0
+SInStyle.NativeKMeansMaxIterations: 20
+SInStyle.NativeKMeansEpsilon: 0.001
+SInStyle.NativeKMeansAttempts: 1
+SInStyle.NativeKMeansSeed: 2025
+SInStyle.NativeCoarseToFine: 0
+SInStyle.NativePyramidLevels: 4
+SInStyle.NativeTemporalInitialization: 0
+SInStyle.NativeTemporalCommitStartInputIndex: 1
+SInStyle.NativeInitialOutputDirectory: ""
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

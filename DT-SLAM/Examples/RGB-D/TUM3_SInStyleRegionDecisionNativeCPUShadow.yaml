@@ -1,0 +1,56 @@
+%YAML:1.0
+
+# S1 native CPU DeepFlow plus region-decision shadow. Qualified author labels
+# and imgTotalArea are replayed only to isolate the motion-evidence and region
+# decision chain. All outputs remain diagnostic; actual_slam_removed stays 0.
+Camera.fx: 535.4
+Camera.fy: 539.2
+Camera.cx: 320.1
+Camera.cy: 247.6
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 0
+
+SInStyle.ShadowEnable: 1
+SInStyle.Backend: "reference_replay"
+SInStyle.ReferenceBackend: "deepflow_cpu"
+SInStyle.ReferenceDirectory: "."
+SInStyle.ReferenceMaskSuffix: "_mask_pre_runner_dilate.png"
+SInStyle.ReferenceRegionValidSuffix: "_region_valid.png"
+SInStyle.RequireLabels: 1
+SInStyle.LogEveryN: 10
+SInStyle.CsvPath: ""
+
+SInStyle.DenseFlowResidualEnable: 1
+SInStyle.DenseFlowResidualBackend: "deepflow_cpu"
+SInStyle.DenseFlowResidualRequireReference: 0
+SInStyle.DenseFlowUseTemporalRegionPrior: 1
+
+SInStyle.RegionDynamicShadowEnable: 1
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

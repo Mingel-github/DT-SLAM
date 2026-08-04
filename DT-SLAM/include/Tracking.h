@@ -39,6 +39,14 @@
 #include "System.h"
 #include "GeometricDynamicDetector.h"
 #include "JiGeometryBaseline.h"
+#include "SInStyleDynamicDetector.h"
+#include "SInStyleInitialRegionClusterer.h"
+#include "SInStyleGradientRegionSplitter.h"
+#include "SInStylePlaneEdgeRegionSplitter.h"
+#include "SInStyleRAGRegionMerger.h"
+#include "SInStyleDenseFlowResidualEstimator.h"
+#include "SInStyleRegionDynamicClassifier.h"
+#include "SInStyleDepthFilter.h"
 
 #include <mutex>
 #include <deque>
@@ -99,6 +107,10 @@ public:
     cv::Mat GrabImageMonocular(const cv::Mat &im, const double &timestamp);
     void SetGroundTruthPoseForGeometry(const cv::Mat &TcwGroundTruth);
     void SaveGeometryPoseDiagnostics();
+    void SaveSInStyleShadowDiagnostics();
+    void SaveSInStyleDepthFilterDiagnostics();
+    cv::Mat GetCurrentDynamicDepthMaskForMapping() const;
+    cv::Mat GetCurrentStaticDepthForMapping() const;
     const std::vector<unsigned char>&
         GetCurrentSparseFlowRemovedAssociations() const;
 
@@ -184,6 +196,9 @@ protected:
     // Semantic dynamic observations are kept separate from optimizer outliers.
     void UpdateDynamicFeaturesFromMask(Frame &frame, const cv::Mat &mask);
     int RemoveDynamicAssociations(Frame &frame);
+    bool FailOpenSInRegionFeatureFilterForTracking(
+        const std::string &stage);
+    void RestoreSInRegionFeatureFilterForMapping();
     void RunGeometryShadow();
     void RunMultiReferenceGeometryShadow();
     void RunSparseEgoFlowShadow();
@@ -198,6 +213,11 @@ protected:
         const cv::Mat &referenceDepth);
     void SaveGeometryDebugImages(const GeometricWarpResult &result);
     void RunJiGeometryShadow();
+    void RunSInStyleRegionShadow(const cv::Mat &depthMeters,
+                                 const cv::Mat &denseFlowGray);
+    void RunSInStyleDepthFilter(const cv::Mat &depthMeters,
+                                const cv::Mat &semanticDynamicMask);
+    void FinalizeSInStyleDepthFilterForMapping();
     void SaveJiGeometryDebugImages(
         const JiDepthClusteringResult &result);
     void CaptureJiInitialTrackingSnapshot();
@@ -258,6 +278,119 @@ protected:
 
     // For RGB-D inputs only. For some datasets (e.g. TUM) the depthmap values are scaled.
     float mDepthMapFactor;
+
+    // S1 SIn-style region behavior reference. Shadow-only: no Frame,
+    // association, optimizer, MapPoint, or semantic-mask mutation.
+    SInStyleDynamicDetector mSInStyleDetector;
+    SInStyleInitialRegionClusterer mSInStyleInitialRegionClusterer;
+    SInStyleGradientRegionSplitter mSInStyleGradientRegionSplitter;
+    SInStylePlaneEdgeRegionSplitter mSInStylePlaneEdgeRegionSplitter;
+    SInStyleRAGRegionMerger mSInStyleRAGRegionMerger;
+    SInStyleDenseFlowResidualEstimator mSInStyleDenseFlowResidualEstimator;
+    SInStyleRegionDynamicClassifier mSInStyleRegionDynamicClassifier;
+    SInStyleDepthFilter mSInStyleDepthFilter;
+    bool mbSInStyleShadowEnabled;
+    bool mbSInStyleNativeInitialRegionsEnabled;
+    bool mbSInStyleNativeGradientSplitEnabled;
+    bool mbSInStyleNativePlaneEdgeEnabled;
+    bool mbSInStyleNativeRAGMergeEnabled;
+    bool mbSInStyleDenseFlowResidualEnabled;
+    bool mbSInStyleRegionDynamicEnabled;
+    bool mbSInStyleRegionFeatureFilterEnabled;
+    bool mbSInStyleDepthFilterEnabled;
+    int mnSInStyleRegionFeatureFilterMinimumRemainingFeatures;
+    int mnSInStyleLogEveryN;
+    std::string mSInStyleReferenceBackend;
+    std::string mSInStyleRegionDynamicLabelSource;
+    std::string mSInStyleShadowCsvPath;
+    std::string mSInStyleNativeInitialOutputDir;
+    std::string mSInStyleNativeGradientOutputDir;
+    std::string mSInStyleNativePlaneOutputDir;
+    std::string mSInStyleNativeRAGOutputDir;
+    std::string mSInStyleRegionDynamicOutputDir;
+    std::string mSInStyleDepthFilterMaskMode;
+    std::string mSInStyleDepthFilterCsvPath;
+    std::string mSInStyleDepthFilterOutputDir;
+    std::vector<unsigned char> mvbCurrentSInRegionDynamicFeatures;
+    std::vector<unsigned char> mvbCurrentSInRegionNewDynamicFeatures;
+    std::vector<unsigned char> mvbCurrentSInRegionRemovedAssociations;
+    bool mbCurrentSInRegionTrackingFailOpen;
+    cv::Mat mCurrentSInGeometryDynamicMask;
+    bool mbCurrentSInGeometryEvidenceAvailable;
+    SInStyleDepthFilterResult mCurrentSInDepthFilterResult;
+    bool mbCurrentSInDepthMappingAdmissible;
+    long unsigned int mnSInStyleComputedFrames;
+    long unsigned int mnSInStyleInputFrameIndex;
+    long unsigned int mnSInStyleResetEpoch;
+    long unsigned int mnSInStyleDepthFilterInputFrameIndex;
+
+    struct SInStyleDepthFilterRecord
+    {
+        long unsigned int inputFrameIndex;
+        long unsigned int frameId;
+        double timestamp;
+        SInStyleDepthFilterStats stats;
+        int trackingStateAfter;
+        bool mappingOutputAvailable;
+        bool maskWritten;
+    };
+    std::vector<SInStyleDepthFilterRecord>
+        mvSInStyleDepthFilterDiagnostics;
+
+    struct SInStyleShadowRecord
+    {
+        long unsigned int inputFrameIndex;
+        long unsigned int frameId;
+        long unsigned int resetEpoch;
+        double timestamp;
+        std::string referenceBackend;
+        std::string regionDynamicLabelSource;
+        SInStyleShadowStats stats;
+        SInStyleRuntimeStats runtime;
+        SInStyleInitialRegionStats nativeInitialStats;
+        SInStyleGradientSplitStats nativeGradientStats;
+        SInStylePlaneEdgeSplitStats nativePlaneStats;
+        SInStyleRAGMergeStats nativeRAGStats;
+        SInStyleDenseFlowResidualStats denseFlowStats;
+        SInStyleRegionDynamicStats regionDynamicStats;
+        std::size_t regionDynamicOrbCount;
+        std::size_t regionDynamicAuthorOverlapPixels;
+        std::size_t regionDynamicAuthorUnionPixels;
+        std::size_t regionDynamicAuthorOverlapOrbCount;
+        bool regionFeatureFilterEnabled;
+        bool regionFeatureFilterApplied;
+        std::string regionFeatureFilterState;
+        std::size_t regionFeatureFilterCandidateFeatures;
+        std::size_t regionFeatureFilterSemanticOverlap;
+        std::size_t regionFeatureFilterNewDynamicFeatures;
+        std::size_t regionFeatureFilterRemainingFeatures;
+        std::size_t regionFeatureFilterActualRemovedAssociations;
+        bool regionFeatureFilterTrackingFailOpen;
+        std::string regionFeatureFilterTrackingFailOpenStage;
+        std::size_t regionFeatureFilterTrackingFailOpenClearedFeatures;
+        bool regionFeatureFilterMappingFlagsRestored;
+        std::size_t nativeInitialOrbAssignedCount;
+        bool nativeInitialLabelsWritten;
+        bool nativeGradientEdgeWritten;
+        bool nativeGradientSplitLabelsWritten;
+        bool nativePlaneRawBoundaryWritten;
+        bool nativePlaneRetainedBoundaryWritten;
+        bool nativeCombinedEdgeWritten;
+        bool nativeCombinedSplitLabelsWritten;
+        bool nativeRAGMergedLabelsWritten;
+        std::size_t rawOrbCount;
+        std::size_t authorDynamicMaskHitOnDtOrbSet;
+        std::size_t depthSupportedDynamicOrbCount;
+        std::size_t validOrbCount;
+        std::size_t unknownOrbCount;
+        std::size_t semanticDynamicOrbCount;
+        std::size_t semanticAuthorDynamicOverlapOnDtOrbSet;
+        std::size_t wouldKeepOrbCount;
+        bool counterfactualFallbackOnDtOrbSet;
+        std::size_t counterfactualRemovedOnDtOrbSet;
+        int trackingStateAfter;
+    };
+    std::vector<SInStyleShadowRecord> mvSInStyleShadowDiagnostics;
 
     // G0 geometry shadow state. It is read-only with respect to SLAM.
     cv::Mat mCurrentDepthMeters;

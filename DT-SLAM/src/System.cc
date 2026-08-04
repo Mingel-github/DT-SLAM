@@ -162,6 +162,8 @@ cv::Mat System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
+    mDynamicDepthMaskForMapping.release();
+    mStaticDepthForMapping.release();
     return Tcw;
 }
 
@@ -216,6 +218,10 @@ cv::Mat System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap,
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
+    mDynamicDepthMaskForMapping =
+        mpTracker->GetCurrentDynamicDepthMaskForMapping();
+    mStaticDepthForMapping =
+        mpTracker->GetCurrentStaticDepthForMapping();
     return Tcw;
 }
 
@@ -267,6 +273,8 @@ cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp)
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
+    mDynamicDepthMaskForMapping.release();
+    mStaticDepthForMapping.release();
 
     return Tcw;
 }
@@ -320,6 +328,8 @@ void System::Shutdown()
     }
 
     mpTracker->SaveGeometryPoseDiagnostics();
+    mpTracker->SaveSInStyleShadowDiagnostics();
+    mpTracker->SaveSInStyleDepthFilterDiagnostics();
 
     if(mpViewer)
         pangolin::BindToContext("ORB-SLAM2: Map Viewer");
@@ -498,6 +508,18 @@ vector<cv::KeyPoint> System::GetTrackedKeyPointsUn()
 {
     unique_lock<mutex> lock(mMutexState);
     return mTrackedKeyPointsUn;
+}
+
+cv::Mat System::GetCurrentDynamicDepthMaskForMapping()
+{
+    unique_lock<mutex> lock(mMutexState);
+    return mDynamicDepthMaskForMapping.clone();
+}
+
+cv::Mat System::GetCurrentStaticDepthForMapping()
+{
+    unique_lock<mutex> lock(mMutexState);
+    return mStaticDepthForMapping.clone();
 }
 
 } //namespace ORB_SLAM

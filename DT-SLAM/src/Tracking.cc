@@ -40,6 +40,8 @@
 #include"PnPsolver.h"
 
 #include <chrono>
+#include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -310,6 +312,24 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mState(NO_IMAGES_YET), mSensor(sensor), mbOnlyTracking(false), mbVO(false), mpORBVocabulary(pVoc),
     mpKeyFrameDB(pKFDB), mpInitializer(static_cast<Initializer*>(NULL)), mpSystem(pSys), mpViewer(NULL),
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpMap(pMap),
+    mbSInStyleShadowEnabled(false),
+    mbSInStyleNativeInitialRegionsEnabled(false),
+    mbSInStyleNativeGradientSplitEnabled(false),
+    mbSInStyleNativePlaneEdgeEnabled(false),
+    mbSInStyleNativeRAGMergeEnabled(false),
+    mbSInStyleDenseFlowResidualEnabled(false),
+    mbSInStyleRegionDynamicEnabled(false),
+    mbSInStyleRegionFeatureFilterEnabled(false),
+    mbSInStyleDepthFilterEnabled(false),
+    mnSInStyleRegionFeatureFilterMinimumRemainingFeatures(250),
+    mnSInStyleLogEveryN(30),
+    mSInStyleDepthFilterMaskMode("semantic_or_geometry"),
+    mbCurrentSInRegionTrackingFailOpen(false),
+    mbCurrentSInGeometryEvidenceAvailable(false),
+    mbCurrentSInDepthMappingAdmissible(false),
+    mnSInStyleComputedFrames(0), mnSInStyleInputFrameIndex(0),
+    mnSInStyleResetEpoch(0),
+    mnSInStyleDepthFilterInputFrameIndex(0),
     mbGeometryShadowEnabled(false),
     mbGeometrySingleReferenceShadowEnabled(true),
     mbGeometryDebugSaveEnabled(false),
@@ -454,6 +474,725 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
             mDepthMapFactor=1;
         else
             mDepthMapFactor = 1.0f/mDepthMapFactor;
+    }
+
+    SInStyleDetectorConfig sinStyleConfig;
+    const cv::FileNode sinStyleEnableNode =
+        fSettings["SInStyle.ShadowEnable"];
+    if(!sinStyleEnableNode.empty())
+        mbSInStyleShadowEnabled = static_cast<int>(sinStyleEnableNode)!=0;
+    sinStyleConfig.enabled = mbSInStyleShadowEnabled;
+
+    const cv::FileNode sinStyleBackendNode =
+        fSettings["SInStyle.Backend"];
+    if(!sinStyleBackendNode.empty())
+        sinStyleBackendNode >> sinStyleConfig.backend;
+
+    const cv::FileNode sinStyleReferenceDirectoryNode =
+        fSettings["SInStyle.ReferenceDirectory"];
+    if(!sinStyleReferenceDirectoryNode.empty())
+        sinStyleReferenceDirectoryNode >> sinStyleConfig.referenceDirectory;
+    const char *sinStyleReferenceDirectoryOverride =
+        std::getenv("DT_SLAM_SIN_REFERENCE_DIR");
+    if(sinStyleReferenceDirectoryOverride &&
+       sinStyleReferenceDirectoryOverride[0]!='\0')
+    {
+        sinStyleConfig.referenceDirectory =
+            sinStyleReferenceDirectoryOverride;
+    }
+
+    const cv::FileNode sinStyleReferenceBackendNode =
+        fSettings["SInStyle.ReferenceBackend"];
+    if(!sinStyleReferenceBackendNode.empty())
+        sinStyleReferenceBackendNode >> mSInStyleReferenceBackend;
+    if(mbSInStyleShadowEnabled && mSInStyleReferenceBackend.empty())
+        throw std::invalid_argument(
+            "SInStyle.ReferenceBackend must identify deepflow_cpu or brox_cuda");
+    if(mbSInStyleShadowEnabled &&
+       mSInStyleReferenceBackend!="deepflow_cpu" &&
+       mSInStyleReferenceBackend!="brox_cuda")
+    {
+        throw std::invalid_argument(
+            "SInStyle.ReferenceBackend must be deepflow_cpu or brox_cuda");
+    }
+
+    const cv::FileNode sinStyleMaskSuffixNode =
+        fSettings["SInStyle.ReferenceMaskSuffix"];
+    if(!sinStyleMaskSuffixNode.empty())
+        sinStyleMaskSuffixNode >> sinStyleConfig.referenceMaskSuffix;
+
+    const cv::FileNode sinStyleRequireLabelsNode =
+        fSettings["SInStyle.RequireLabels"];
+    if(!sinStyleRequireLabelsNode.empty())
+    {
+        sinStyleConfig.requireLabels =
+            static_cast<int>(sinStyleRequireLabelsNode)!=0;
+    }
+    const cv::FileNode sinStyleRegionValidSuffixNode =
+        fSettings["SInStyle.ReferenceRegionValidSuffix"];
+    if(!sinStyleRegionValidSuffixNode.empty())
+    {
+        sinStyleRegionValidSuffixNode >>
+            sinStyleConfig.referenceRegionValidSuffix;
+    }
+    const cv::FileNode sinStyleRegionDynamicEnableNode =
+        fSettings["SInStyle.RegionDynamicShadowEnable"];
+    if(!sinStyleRegionDynamicEnableNode.empty())
+    {
+        mbSInStyleRegionDynamicEnabled =
+            static_cast<int>(sinStyleRegionDynamicEnableNode)!=0;
+    }
+    mSInStyleRegionDynamicLabelSource = "reference_replay";
+    const cv::FileNode sinStyleRegionDynamicLabelSourceNode =
+        fSettings["SInStyle.RegionDynamicLabelSource"];
+    if(!sinStyleRegionDynamicLabelSourceNode.empty())
+    {
+        sinStyleRegionDynamicLabelSourceNode >>
+            mSInStyleRegionDynamicLabelSource;
+    }
+    if(mSInStyleRegionDynamicLabelSource!="reference_replay" &&
+       mSInStyleRegionDynamicLabelSource!="native_rag")
+    {
+        throw std::invalid_argument(
+            "SInStyle.RegionDynamicLabelSource must be reference_replay "
+            "or native_rag");
+    }
+    const cv::FileNode sinStyleRegionDynamicOutputDirNode =
+        fSettings["SInStyle.RegionDynamicOutputDirectory"];
+    if(!sinStyleRegionDynamicOutputDirNode.empty())
+    {
+        sinStyleRegionDynamicOutputDirNode >>
+            mSInStyleRegionDynamicOutputDir;
+    }
+    const char *sinStyleRegionDynamicOutputDirOverride =
+        std::getenv("DT_SLAM_SIN_REGION_DYNAMIC_DIR");
+    if(sinStyleRegionDynamicOutputDirOverride &&
+       sinStyleRegionDynamicOutputDirOverride[0]!='\0')
+    {
+        mSInStyleRegionDynamicOutputDir =
+            sinStyleRegionDynamicOutputDirOverride;
+    }
+    sinStyleConfig.requireRegionValidity =
+        mbSInStyleRegionDynamicEnabled &&
+        mSInStyleRegionDynamicLabelSource=="reference_replay";
+
+    const cv::FileNode sinStyleLogEveryNode =
+        fSettings["SInStyle.LogEveryN"];
+    if(!sinStyleLogEveryNode.empty())
+        mnSInStyleLogEveryN = static_cast<int>(sinStyleLogEveryNode);
+    if(mnSInStyleLogEveryN<0)
+        throw std::invalid_argument("SInStyle.LogEveryN must be non-negative");
+
+    const cv::FileNode sinStyleCsvNode =
+        fSettings["SInStyle.CsvPath"];
+    if(!sinStyleCsvNode.empty())
+        sinStyleCsvNode >> mSInStyleShadowCsvPath;
+    const char *sinStyleCsvOverride =
+        std::getenv("DT_SLAM_SIN_SHADOW_FRAME_CSV");
+    if(sinStyleCsvOverride && sinStyleCsvOverride[0]!='\0')
+        mSInStyleShadowCsvPath = sinStyleCsvOverride;
+
+    if(mbSInStyleShadowEnabled && sensor!=System::RGBD)
+        throw std::invalid_argument(
+            "SInStyle.ShadowEnable=1 requires RGB-D input");
+    mSInStyleDetector.Configure(sinStyleConfig);
+
+    SInStyleInitialRegionConfig sinStyleInitialRegionConfig;
+    const cv::FileNode sinStyleNativeInitialEnableNode =
+        fSettings["SInStyle.NativeInitialRegionsEnable"];
+    if(!sinStyleNativeInitialEnableNode.empty())
+    {
+        mbSInStyleNativeInitialRegionsEnabled =
+            static_cast<int>(sinStyleNativeInitialEnableNode)!=0;
+    }
+    sinStyleInitialRegionConfig.enabled =
+        mbSInStyleNativeInitialRegionsEnabled;
+
+    const cv::FileNode sinStyleClusterPixelDivisorNode =
+        fSettings["SInStyle.NativeClusterPixelDivisor"];
+    if(!sinStyleClusterPixelDivisorNode.empty())
+    {
+        sinStyleInitialRegionConfig.clusterPixelDivisor =
+            static_cast<double>(sinStyleClusterPixelDivisorNode);
+    }
+    const cv::FileNode sinStyleMaximumDepthNode =
+        fSettings["SInStyle.NativeMaximumDepthM"];
+    if(!sinStyleMaximumDepthNode.empty())
+    {
+        sinStyleInitialRegionConfig.maximumDepthMeters =
+            static_cast<float>(sinStyleMaximumDepthNode);
+    }
+    const cv::FileNode sinStyleKMeansMaxIterationsNode =
+        fSettings["SInStyle.NativeKMeansMaxIterations"];
+    if(!sinStyleKMeansMaxIterationsNode.empty())
+    {
+        sinStyleInitialRegionConfig.maximumIterations =
+            static_cast<int>(sinStyleKMeansMaxIterationsNode);
+    }
+    const cv::FileNode sinStyleKMeansEpsilonNode =
+        fSettings["SInStyle.NativeKMeansEpsilon"];
+    if(!sinStyleKMeansEpsilonNode.empty())
+    {
+        sinStyleInitialRegionConfig.epsilon =
+            static_cast<double>(sinStyleKMeansEpsilonNode);
+    }
+    const cv::FileNode sinStyleKMeansAttemptsNode =
+        fSettings["SInStyle.NativeKMeansAttempts"];
+    if(!sinStyleKMeansAttemptsNode.empty())
+    {
+        sinStyleInitialRegionConfig.attempts =
+            static_cast<int>(sinStyleKMeansAttemptsNode);
+    }
+    const cv::FileNode sinStyleKMeansSeedNode =
+        fSettings["SInStyle.NativeKMeansSeed"];
+    if(!sinStyleKMeansSeedNode.empty())
+    {
+        const double seedValue =
+            static_cast<double>(sinStyleKMeansSeedNode);
+        if(!std::isfinite(seedValue) || seedValue<0.0)
+            throw std::invalid_argument(
+                "SInStyle.NativeKMeansSeed must be non-negative");
+        sinStyleInitialRegionConfig.randomSeed =
+            static_cast<std::uint64_t>(seedValue);
+    }
+    const cv::FileNode sinStyleCoarseToFineNode =
+        fSettings["SInStyle.NativeCoarseToFine"];
+    if(!sinStyleCoarseToFineNode.empty())
+    {
+        sinStyleInitialRegionConfig.coarseToFine =
+            static_cast<int>(sinStyleCoarseToFineNode)!=0;
+    }
+    const cv::FileNode sinStylePyramidLevelsNode =
+        fSettings["SInStyle.NativePyramidLevels"];
+    if(!sinStylePyramidLevelsNode.empty())
+    {
+        sinStyleInitialRegionConfig.pyramidLevels =
+            static_cast<int>(sinStylePyramidLevelsNode);
+    }
+    const cv::FileNode sinStyleTemporalInitializationNode =
+        fSettings["SInStyle.NativeTemporalInitialization"];
+    if(!sinStyleTemporalInitializationNode.empty())
+    {
+        sinStyleInitialRegionConfig.temporalInitialization =
+            static_cast<int>(sinStyleTemporalInitializationNode)!=0;
+    }
+    const cv::FileNode sinStyleTemporalCommitStartNode =
+        fSettings["SInStyle.NativeTemporalCommitStartInputIndex"];
+    if(!sinStyleTemporalCommitStartNode.empty())
+    {
+        const double startIndex =
+            static_cast<double>(sinStyleTemporalCommitStartNode);
+        if(!std::isfinite(startIndex) || startIndex<0.0)
+            throw std::invalid_argument(
+                "SInStyle.NativeTemporalCommitStartInputIndex must be non-negative");
+        sinStyleInitialRegionConfig.temporalCommitStartInputIndex =
+            static_cast<long unsigned int>(startIndex);
+    }
+    const cv::FileNode sinStyleNativeInitialOutputDirNode =
+        fSettings["SInStyle.NativeInitialOutputDirectory"];
+    if(!sinStyleNativeInitialOutputDirNode.empty())
+    {
+        sinStyleNativeInitialOutputDirNode >>
+            mSInStyleNativeInitialOutputDir;
+    }
+    const char *sinStyleNativeInitialOutputDirOverride =
+        std::getenv("DT_SLAM_SIN_NATIVE_INITIAL_DIR");
+    if(sinStyleNativeInitialOutputDirOverride &&
+       sinStyleNativeInitialOutputDirOverride[0]!='\0')
+    {
+        mSInStyleNativeInitialOutputDir =
+            sinStyleNativeInitialOutputDirOverride;
+    }
+    if(mbSInStyleNativeInitialRegionsEnabled && !mbSInStyleShadowEnabled)
+        throw std::invalid_argument(
+            "SInStyle.NativeInitialRegionsEnable=1 requires SInStyle.ShadowEnable=1");
+    mSInStyleInitialRegionClusterer.Configure(
+        sinStyleInitialRegionConfig,mK);
+
+    SInStyleGradientSplitConfig sinStyleGradientSplitConfig;
+    sinStyleGradientSplitConfig.maximumDepthMeters =
+        sinStyleInitialRegionConfig.maximumDepthMeters;
+    const cv::FileNode sinStyleGradientSplitEnableNode =
+        fSettings["SInStyle.NativeGradientSplitEnable"];
+    if(!sinStyleGradientSplitEnableNode.empty())
+    {
+        mbSInStyleNativeGradientSplitEnabled =
+            static_cast<int>(sinStyleGradientSplitEnableNode)!=0;
+    }
+    sinStyleGradientSplitConfig.enabled =
+        mbSInStyleNativeGradientSplitEnabled;
+    const cv::FileNode sinStyleGradientRelativeThresholdNode =
+        fSettings["SInStyle.NativeGradientRelativeThreshold"];
+    if(!sinStyleGradientRelativeThresholdNode.empty())
+    {
+        sinStyleGradientSplitConfig.relativeThreshold =
+            static_cast<float>(sinStyleGradientRelativeThresholdNode);
+    }
+    const cv::FileNode sinStyleGradientAbsoluteThresholdNode =
+        fSettings["SInStyle.NativeGradientAbsoluteThresholdM"];
+    if(!sinStyleGradientAbsoluteThresholdNode.empty())
+    {
+        sinStyleGradientSplitConfig.absoluteThresholdMeters =
+            static_cast<float>(sinStyleGradientAbsoluteThresholdNode);
+    }
+    const cv::FileNode sinStyleGradientMedianRadiusNode =
+        fSettings["SInStyle.NativeGradientMedianRadius"];
+    if(!sinStyleGradientMedianRadiusNode.empty())
+    {
+        sinStyleGradientSplitConfig.medianRadius =
+            static_cast<int>(sinStyleGradientMedianRadiusNode);
+    }
+    const cv::FileNode sinStyleGradientMinimumSupportNode =
+        fSettings["SInStyle.NativeGradientMinimumSupport"];
+    if(!sinStyleGradientMinimumSupportNode.empty())
+    {
+        sinStyleGradientSplitConfig.minimumMedianSupport =
+            static_cast<int>(sinStyleGradientMinimumSupportNode);
+    }
+    const cv::FileNode sinStyleGradientConnectivityNode =
+        fSettings["SInStyle.NativeGradientConnectivity"];
+    if(!sinStyleGradientConnectivityNode.empty())
+    {
+        sinStyleGradientSplitConfig.connectivity =
+            static_cast<int>(sinStyleGradientConnectivityNode);
+    }
+    const cv::FileNode sinStyleGradientSmallComponentNode =
+        fSettings["SInStyle.NativeGradientSmallComponentAuditPixels"];
+    if(!sinStyleGradientSmallComponentNode.empty())
+    {
+        const double smallComponentPixels =
+            static_cast<double>(sinStyleGradientSmallComponentNode);
+        if(!std::isfinite(smallComponentPixels) || smallComponentPixels<0.0)
+            throw std::invalid_argument(
+                "SInStyle.NativeGradientSmallComponentAuditPixels "
+                "must be non-negative");
+        sinStyleGradientSplitConfig.smallComponentAuditPixels =
+            static_cast<std::size_t>(smallComponentPixels);
+    }
+    const cv::FileNode sinStyleGradientOutputDirNode =
+        fSettings["SInStyle.NativeGradientOutputDirectory"];
+    if(!sinStyleGradientOutputDirNode.empty())
+        sinStyleGradientOutputDirNode >> mSInStyleNativeGradientOutputDir;
+    const char *sinStyleGradientOutputDirOverride =
+        std::getenv("DT_SLAM_SIN_NATIVE_GRADIENT_DIR");
+    if(sinStyleGradientOutputDirOverride &&
+       sinStyleGradientOutputDirOverride[0]!='\0')
+    {
+        mSInStyleNativeGradientOutputDir =
+            sinStyleGradientOutputDirOverride;
+    }
+    if(mbSInStyleNativeGradientSplitEnabled &&
+       !mbSInStyleNativeInitialRegionsEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.NativeGradientSplitEnable=1 requires "
+            "SInStyle.NativeInitialRegionsEnable=1");
+    }
+    mSInStyleGradientRegionSplitter.Configure(
+        sinStyleGradientSplitConfig);
+
+    SInStylePlaneEdgeSplitConfig sinStylePlaneEdgeConfig;
+    sinStylePlaneEdgeConfig.maximumDepthMeters =
+        sinStyleInitialRegionConfig.maximumDepthMeters;
+    const cv::FileNode sinStylePlaneEdgeEnableNode =
+        fSettings["SInStyle.NativePlaneEdgeEnable"];
+    if(!sinStylePlaneEdgeEnableNode.empty())
+    {
+        mbSInStyleNativePlaneEdgeEnabled =
+            static_cast<int>(sinStylePlaneEdgeEnableNode)!=0;
+    }
+    sinStylePlaneEdgeConfig.enabled = mbSInStyleNativePlaneEdgeEnabled;
+#define READ_SIN_PLANE_INT(KEY, FIELD) \
+    do { \
+        const cv::FileNode node = fSettings[KEY]; \
+        if(!node.empty()) sinStylePlaneEdgeConfig.FIELD = \
+            static_cast<int>(node); \
+    } while(false)
+#define READ_SIN_PLANE_DOUBLE(KEY, FIELD) \
+    do { \
+        const cv::FileNode node = fSettings[KEY]; \
+        if(!node.empty()) sinStylePlaneEdgeConfig.FIELD = \
+            static_cast<double>(node); \
+    } while(false)
+    READ_SIN_PLANE_INT("SInStyle.NativePlaneBlockSize",blockSize);
+    READ_SIN_PLANE_INT(
+        "SInStyle.NativePlaneMinimumPixels",minimumPlanePixels);
+    READ_SIN_PLANE_DOUBLE(
+        "SInStyle.NativePlaneDistanceThresholdM",
+        distanceThresholdMeters);
+    READ_SIN_PLANE_DOUBLE(
+        "SInStyle.NativePlaneSensorErrorA",sensorErrorA);
+    READ_SIN_PLANE_DOUBLE(
+        "SInStyle.NativePlaneSensorErrorB",sensorErrorB);
+    READ_SIN_PLANE_DOUBLE(
+        "SInStyle.NativePlaneSensorErrorC",sensorErrorC);
+    READ_SIN_PLANE_INT(
+        "SInStyle.NativePlaneEndpointRadius",endpointRadius);
+    READ_SIN_PLANE_INT(
+        "SInStyle.NativePlaneEndpointMaximumSupportExclusive",
+        endpointMaximumSupportExclusive);
+    READ_SIN_PLANE_INT(
+        "SInStyle.NativePlaneEndpointAssociationRadius",
+        endpointAssociationRadius);
+    READ_SIN_PLANE_INT(
+        "SInStyle.NativePlaneMinimumEndpointCountExclusive",
+        minimumEndpointCountExclusive);
+    READ_SIN_PLANE_INT(
+        "SInStyle.NativePlaneConnectivity",connectivity);
+#undef READ_SIN_PLANE_INT
+#undef READ_SIN_PLANE_DOUBLE
+    const cv::FileNode sinStylePlaneOutputDirNode =
+        fSettings["SInStyle.NativePlaneOutputDirectory"];
+    if(!sinStylePlaneOutputDirNode.empty())
+        sinStylePlaneOutputDirNode >> mSInStyleNativePlaneOutputDir;
+    const char *sinStylePlaneOutputDirOverride =
+        std::getenv("DT_SLAM_SIN_NATIVE_PLANE_DIR");
+    if(sinStylePlaneOutputDirOverride &&
+       sinStylePlaneOutputDirOverride[0]!='\0')
+    {
+        mSInStyleNativePlaneOutputDir =
+            sinStylePlaneOutputDirOverride;
+    }
+    if(mbSInStyleNativePlaneEdgeEnabled &&
+       !mbSInStyleNativeGradientSplitEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.NativePlaneEdgeEnable=1 requires "
+            "SInStyle.NativeGradientSplitEnable=1");
+    }
+    mSInStylePlaneEdgeRegionSplitter.Configure(
+        sinStylePlaneEdgeConfig,mK);
+
+    SInStyleRAGMergeConfig sinStyleRAGConfig;
+    sinStyleRAGConfig.maximumDepthMeters =
+        sinStyleInitialRegionConfig.maximumDepthMeters;
+    const cv::FileNode sinStyleRAGEnableNode =
+        fSettings["SInStyle.NativeRAGMergeEnable"];
+    if(!sinStyleRAGEnableNode.empty())
+        mbSInStyleNativeRAGMergeEnabled =
+            static_cast<int>(sinStyleRAGEnableNode)!=0;
+    sinStyleRAGConfig.enabled = mbSInStyleNativeRAGMergeEnabled;
+#define READ_SIN_RAG_FLOAT(KEY, FIELD) \
+    do { \
+        const cv::FileNode node = fSettings[KEY]; \
+        if(!node.empty()) sinStyleRAGConfig.FIELD = static_cast<float>(node); \
+    } while(false)
+#define READ_SIN_RAG_INT(KEY, FIELD) \
+    do { \
+        const cv::FileNode node = fSettings[KEY]; \
+        if(!node.empty()) sinStyleRAGConfig.FIELD = static_cast<int>(node); \
+    } while(false)
+    READ_SIN_RAG_INT(
+        "SInStyle.NativeRAGAdjacencyDilationRadius",
+        adjacencyDilationRadius);
+    READ_SIN_RAG_INT("SInStyle.NativeRAGHistogramBins",histogramBins);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGAdjacencyThresholdPixels",
+        adjacencyThresholdPixels);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGAreaDepthScoreWeight",areaDepthScoreWeight);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGFakeEdgeWeight",fakeEdgeWeight);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGLargeRegionWeight",largeRegionWeight);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGMiddleRegionWeight",middleRegionWeight);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGSmallRegionWeight",smallRegionWeight);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGMergeThreshold",mergeThreshold);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGDepthRejectThreshold",depthRejectThreshold);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGHighMiddleFraction",highMiddleFraction);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGLargeFraction",largeFraction);
+    READ_SIN_RAG_FLOAT(
+        "SInStyle.NativeRAGSmallFraction",smallFraction);
+#undef READ_SIN_RAG_FLOAT
+#undef READ_SIN_RAG_INT
+    const cv::FileNode sinStyleRAGOutputDirNode =
+        fSettings["SInStyle.NativeRAGOutputDirectory"];
+    if(!sinStyleRAGOutputDirNode.empty())
+        sinStyleRAGOutputDirNode >> mSInStyleNativeRAGOutputDir;
+    const char *sinStyleRAGOutputDirOverride =
+        std::getenv("DT_SLAM_SIN_NATIVE_RAG_DIR");
+    if(sinStyleRAGOutputDirOverride &&
+       sinStyleRAGOutputDirOverride[0]!='\0')
+    {
+        mSInStyleNativeRAGOutputDir = sinStyleRAGOutputDirOverride;
+    }
+    if(mbSInStyleNativeRAGMergeEnabled &&
+       !mbSInStyleNativeGradientSplitEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.NativeRAGMergeEnable=1 requires "
+            "SInStyle.NativeGradientSplitEnable=1");
+    }
+    mSInStyleRAGRegionMerger.Configure(sinStyleRAGConfig);
+
+    SInStyleDenseFlowResidualConfig sinStyleDenseFlowConfig;
+    const cv::FileNode sinStyleDenseFlowEnableNode =
+        fSettings["SInStyle.DenseFlowResidualEnable"];
+    if(!sinStyleDenseFlowEnableNode.empty())
+    {
+        mbSInStyleDenseFlowResidualEnabled =
+            static_cast<int>(sinStyleDenseFlowEnableNode)!=0;
+    }
+    sinStyleDenseFlowConfig.enabled = mbSInStyleDenseFlowResidualEnabled;
+    const cv::FileNode sinStyleDenseFlowBackendNode =
+        fSettings["SInStyle.DenseFlowResidualBackend"];
+    if(!sinStyleDenseFlowBackendNode.empty())
+        sinStyleDenseFlowBackendNode >> sinStyleDenseFlowConfig.backend;
+    const cv::FileNode sinStyleDenseFlowDirectoryNode =
+        fSettings["SInStyle.DenseFlowResidualReferenceDirectory"];
+    if(!sinStyleDenseFlowDirectoryNode.empty())
+    {
+        sinStyleDenseFlowDirectoryNode >>
+            sinStyleDenseFlowConfig.referenceDirectory;
+    }
+    const char *sinStyleDenseFlowDirectoryOverride =
+        std::getenv("DT_SLAM_SIN_DENSE_FLOW_REFERENCE_DIR");
+    if(sinStyleDenseFlowDirectoryOverride &&
+       sinStyleDenseFlowDirectoryOverride[0]!='\0')
+    {
+        sinStyleDenseFlowConfig.referenceDirectory =
+            sinStyleDenseFlowDirectoryOverride;
+    }
+    const cv::FileNode sinStyleDenseFlowRequireNode =
+        fSettings["SInStyle.DenseFlowResidualRequireReference"];
+    if(!sinStyleDenseFlowRequireNode.empty())
+    {
+        sinStyleDenseFlowConfig.requireReference =
+            static_cast<int>(sinStyleDenseFlowRequireNode)!=0;
+    }
+    const cv::FileNode sinStyleDenseFlowTemporalPriorNode =
+        fSettings["SInStyle.DenseFlowUseTemporalRegionPrior"];
+    if(!sinStyleDenseFlowTemporalPriorNode.empty())
+    {
+        sinStyleDenseFlowConfig.useTemporalRegionPrior =
+            static_cast<int>(sinStyleDenseFlowTemporalPriorNode)!=0;
+    }
+    if(mbSInStyleDenseFlowResidualEnabled && !mbSInStyleShadowEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.DenseFlowResidualEnable=1 requires "
+            "SInStyle.ShadowEnable=1");
+    }
+    mSInStyleDenseFlowResidualEstimator.Configure(
+        sinStyleDenseFlowConfig);
+
+    SInStyleRegionDynamicConfig sinStyleRegionDynamicConfig;
+    sinStyleRegionDynamicConfig.enabled = mbSInStyleRegionDynamicEnabled;
+    if(mbSInStyleRegionDynamicEnabled &&
+       !mbSInStyleDenseFlowResidualEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.RegionDynamicShadowEnable=1 requires "
+            "SInStyle.DenseFlowResidualEnable=1");
+    }
+    if(mbSInStyleRegionDynamicEnabled &&
+       mSInStyleRegionDynamicLabelSource=="native_rag" &&
+       !mbSInStyleNativeRAGMergeEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.RegionDynamicLabelSource=native_rag requires "
+            "SInStyle.NativeRAGMergeEnable=1");
+    }
+    if(sinStyleDenseFlowConfig.useTemporalRegionPrior &&
+       !mbSInStyleRegionDynamicEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.DenseFlowUseTemporalRegionPrior=1 requires "
+            "SInStyle.RegionDynamicShadowEnable=1");
+    }
+    const cv::FileNode sinStyleRegionFeatureFilterEnableNode =
+        fSettings["SInStyle.RegionFeatureFilterEnable"];
+    if(!sinStyleRegionFeatureFilterEnableNode.empty())
+    {
+        mbSInStyleRegionFeatureFilterEnabled =
+            static_cast<int>(sinStyleRegionFeatureFilterEnableNode)!=0;
+    }
+    const char *sinStyleRegionFeatureFilterOverride =
+        std::getenv("DT_SLAM_SIN_REGION_FEATURE_FILTER");
+    if(sinStyleRegionFeatureFilterOverride &&
+       sinStyleRegionFeatureFilterOverride[0]!='\0')
+    {
+        mbSInStyleRegionFeatureFilterEnabled =
+            std::string(sinStyleRegionFeatureFilterOverride)!="0";
+    }
+    const cv::FileNode sinStyleRegionFeatureMinimumNode =
+        fSettings[
+            "SInStyle.RegionFeatureFilterMinimumRemainingFeatures"];
+    if(!sinStyleRegionFeatureMinimumNode.empty())
+    {
+        mnSInStyleRegionFeatureFilterMinimumRemainingFeatures =
+            static_cast<int>(sinStyleRegionFeatureMinimumNode);
+    }
+    const char *sinStyleRegionFeatureMinimumOverride =
+        std::getenv("DT_SLAM_SIN_REGION_FEATURE_MIN_REMAINING");
+    if(sinStyleRegionFeatureMinimumOverride &&
+       sinStyleRegionFeatureMinimumOverride[0]!='\0')
+    {
+        char *end = NULL;
+        errno = 0;
+        const long parsed = std::strtol(
+            sinStyleRegionFeatureMinimumOverride,&end,10);
+        if(errno!=0 || end==sinStyleRegionFeatureMinimumOverride ||
+           *end!='\0' || parsed<1 || parsed>INT_MAX)
+        {
+            throw std::invalid_argument(
+                "DT_SLAM_SIN_REGION_FEATURE_MIN_REMAINING must be a "
+                "positive integer");
+        }
+        mnSInStyleRegionFeatureFilterMinimumRemainingFeatures =
+            static_cast<int>(parsed);
+    }
+    if(mnSInStyleRegionFeatureFilterMinimumRemainingFeatures<1)
+    {
+        throw std::invalid_argument(
+            "SInStyle.RegionFeatureFilterMinimumRemainingFeatures "
+            "must be positive");
+    }
+    if(mbSInStyleRegionFeatureFilterEnabled &&
+       (!mbSInStyleRegionDynamicEnabled ||
+        mSInStyleRegionDynamicLabelSource!="native_rag"))
+    {
+        throw std::invalid_argument(
+            "SInStyle.RegionFeatureFilterEnable=1 requires native_rag "
+            "region dynamic shadow");
+    }
+    mSInStyleRegionDynamicClassifier.Configure(
+        sinStyleRegionDynamicConfig);
+
+    SInStyleDepthFilterConfig sinStyleDepthFilterConfig;
+    const cv::FileNode sinStyleDepthFilterEnableNode =
+        fSettings["SInStyle.DepthFilterEnable"];
+    if(!sinStyleDepthFilterEnableNode.empty())
+    {
+        mbSInStyleDepthFilterEnabled =
+            static_cast<int>(sinStyleDepthFilterEnableNode)!=0;
+    }
+    const char *sinStyleDepthFilterEnableOverride =
+        std::getenv("DT_SLAM_SIN_DEPTH_FILTER");
+    if(sinStyleDepthFilterEnableOverride &&
+       sinStyleDepthFilterEnableOverride[0]!='\0')
+    {
+        mbSInStyleDepthFilterEnabled =
+            std::string(sinStyleDepthFilterEnableOverride)!="0";
+    }
+    const cv::FileNode sinStyleDepthFilterModeNode =
+        fSettings["SInStyle.DepthFilterMaskMode"];
+    if(!sinStyleDepthFilterModeNode.empty())
+        sinStyleDepthFilterModeNode >> mSInStyleDepthFilterMaskMode;
+    const char *sinStyleDepthFilterModeOverride =
+        std::getenv("DT_SLAM_SIN_DEPTH_FILTER_MODE");
+    if(sinStyleDepthFilterModeOverride &&
+       sinStyleDepthFilterModeOverride[0]!='\0')
+    {
+        mSInStyleDepthFilterMaskMode =
+            sinStyleDepthFilterModeOverride;
+    }
+    const cv::FileNode sinStyleDepthFilterCsvNode =
+        fSettings["SInStyle.DepthFilterCsvPath"];
+    if(!sinStyleDepthFilterCsvNode.empty())
+        sinStyleDepthFilterCsvNode >> mSInStyleDepthFilterCsvPath;
+    const char *sinStyleDepthFilterCsvOverride =
+        std::getenv("DT_SLAM_SIN_DEPTH_FILTER_CSV");
+    if(sinStyleDepthFilterCsvOverride &&
+       sinStyleDepthFilterCsvOverride[0]!='\0')
+    {
+        mSInStyleDepthFilterCsvPath = sinStyleDepthFilterCsvOverride;
+    }
+    const cv::FileNode sinStyleDepthFilterOutputNode =
+        fSettings["SInStyle.DepthFilterOutputDirectory"];
+    if(!sinStyleDepthFilterOutputNode.empty())
+        sinStyleDepthFilterOutputNode >> mSInStyleDepthFilterOutputDir;
+    const char *sinStyleDepthFilterOutputOverride =
+        std::getenv("DT_SLAM_SIN_DEPTH_FILTER_OUTPUT_DIR");
+    if(sinStyleDepthFilterOutputOverride &&
+       sinStyleDepthFilterOutputOverride[0]!='\0')
+    {
+        mSInStyleDepthFilterOutputDir =
+            sinStyleDepthFilterOutputOverride;
+    }
+    if(mbSInStyleDepthFilterEnabled && sensor!=System::RGBD)
+    {
+        throw std::invalid_argument(
+            "SInStyle.DepthFilterEnable=1 requires RGB-D input");
+    }
+    if(mbSInStyleDepthFilterEnabled &&
+       mSInStyleDepthFilterMaskMode=="geometry_only" &&
+       !mbSInStyleRegionDynamicEnabled)
+    {
+        throw std::invalid_argument(
+            "SInStyle.DepthFilterMaskMode=geometry_only requires the "
+            "SIn-style region dynamic detector");
+    }
+    sinStyleDepthFilterConfig.enabled = mbSInStyleDepthFilterEnabled;
+    sinStyleDepthFilterConfig.maskMode = mSInStyleDepthFilterMaskMode;
+    mSInStyleDepthFilter.Configure(sinStyleDepthFilterConfig);
+
+    if(mbSInStyleShadowEnabled)
+    {
+        cout << endl
+             << "[SIn S1] shadow-only region reference enabled" << endl
+             << "[SIn S1] backend: " << sinStyleConfig.backend << endl
+             << "[SIn S1] reference backend: "
+             << mSInStyleReferenceBackend << endl
+             << "[SIn S1] reference directory: "
+             << sinStyleConfig.referenceDirectory << endl
+             << "[SIn S1] native initial regions: "
+             << mbSInStyleNativeInitialRegionsEnabled << endl
+             << "[SIn S1] native coarse-to-fine: "
+             << sinStyleInitialRegionConfig.coarseToFine << endl
+             << "[SIn S1] native gradient split: "
+             << mbSInStyleNativeGradientSplitEnabled << endl
+             << "[SIn S1] OpenCV plane-edge substitute: "
+             << mbSInStyleNativePlaneEdgeEnabled << endl
+             << "[SIn S1] native RAG merge: "
+             << mbSInStyleNativeRAGMergeEnabled << endl
+             << "- dense flow residual replay: "
+             << mbSInStyleDenseFlowResidualEnabled << endl
+             << "[SIn S1] region dynamic classifier shadow: "
+             << mbSInStyleRegionDynamicEnabled << endl
+             << "[SIn S1] region dynamic label source: "
+             << mSInStyleRegionDynamicLabelSource << endl
+             << "[SIn S2] region feature filter: "
+             << mbSInStyleRegionFeatureFilterEnabled << endl
+             << "[SIn S2] minimum remaining features: "
+             << mnSInStyleRegionFeatureFilterMinimumRemainingFeatures
+             << endl
+             << "[SIn S3] mapping-side dynamic depth filter: "
+             << mbSInStyleDepthFilterEnabled << endl
+             << "[SIn S3] mapping mask mode: "
+             << mSInStyleDepthFilterMaskMode << endl
+             << "[SIn S1] native initial output directory: "
+             << (mSInStyleNativeInitialOutputDir.empty() ?
+                    "disabled" : mSInStyleNativeInitialOutputDir) << endl
+             << "[SIn S1] native gradient output directory: "
+             << (mSInStyleNativeGradientOutputDir.empty() ?
+                    "disabled" : mSInStyleNativeGradientOutputDir) << endl
+             << "[SIn S1] native plane output directory: "
+             << (mSInStyleNativePlaneOutputDir.empty() ?
+                    "disabled" : mSInStyleNativePlaneOutputDir) << endl
+             << "[SIn S1] native RAG output directory: "
+             << (mSInStyleNativeRAGOutputDir.empty() ?
+                    "disabled" : mSInStyleNativeRAGOutputDir) << endl
+             << "[SIn S1] region dynamic output directory: "
+             << (mSInStyleRegionDynamicOutputDir.empty() ?
+                    "disabled" : mSInStyleRegionDynamicOutputDir) << endl
+             << "[SIn S1] dynamic_decision=shadow_only, "
+             << "direct_slam_state_mutation=none" << endl;
+    }
+    else if(mbSInStyleDepthFilterEnabled)
+    {
+        cout << endl
+             << "[SIn S3] mapping-side dynamic depth filter enabled"
+             << endl
+             << "[SIn S3] mapping mask mode: "
+             << mSInStyleDepthFilterMaskMode << endl
+             << "[SIn S3] tracking_state_mutation=none" << endl;
     }
 
     const cv::FileNode geometryEnableNode = fSettings["Geometry.Enable"];
@@ -1738,6 +2477,569 @@ const std::vector<unsigned char>&
 Tracking::GetCurrentSparseFlowRemovedAssociations() const
 {
     return mvbCurrentSparseFlowRemovedAssociations;
+}
+
+void Tracking::SaveSInStyleShadowDiagnostics()
+{
+    if(mSInStyleShadowCsvPath.empty() ||
+       mvSInStyleShadowDiagnostics.empty())
+    {
+        return;
+    }
+
+    ofstream stream(mSInStyleShadowCsvPath.c_str());
+    if(!stream.is_open())
+    {
+        cerr << "[SIn S1] failed to open shadow CSV: "
+             << mSInStyleShadowCsvPath << endl;
+        return;
+    }
+
+    stream << "input_index,frame,reset_epoch,timestamp,backend,"
+           << "region_dynamic_label_source,"
+           << "reference_available,labels_available,"
+           << "pixels,depth_valid_pixels,raw_unknown_pixels,raw_static_pixels,"
+           << "raw_dynamic_pixels,valid_pixels,static_pixels,"
+           << "dynamic_pixels,unknown_pixels,positive_label_count,"
+           << "positive_label_pixels,depth_supported_positive_label_pixels,"
+           << "positive_label_component_count,"
+           << "author_dynamic_pixels_on_positive_labels,"
+           << "author_dynamic_pixels_on_label_zero,"
+           << "author_dynamic_pixels_with_labels_unavailable,raw_orb_count,"
+           << "author_dynamic_mask_hit_on_dt_orb_set,"
+           << "depth_supported_dynamic_orb_count,"
+           << "valid_orb_count,unknown_orb_count,"
+           << "semantic_dynamic_orb_count,"
+           << "semantic_author_dynamic_overlap_on_dt_orb_set,"
+           << "would_keep_orb_count,counterfactual_fallback_on_dt_orb_set,"
+           << "counterfactual_removed_on_dt_orb_set,actual_slam_removed,"
+           << "tracking_state_after,load_ms,state_conversion_ms,"
+           << "region_statistics_ms,total_ms,dynamic_decision,"
+           << "direct_slam_state_mutation,"
+           << "dense_flow_enabled,dense_flow_available,"
+           << "dense_flow_dynamic_state_available,"
+           << "dense_flow_failure_reason,dense_flow_backend,"
+           << "dense_flow_frame_index,dense_flow_intended_reference_lag,"
+           << "dense_flow_reference_index,dense_flow_actual_reference_lag,"
+           << "dense_flow_large_motion,dense_flow_image_scale,"
+           << "dense_flow_homography_samples,dense_flow_max_flow_px,"
+           << "dense_flow_temporal_prior_used,"
+           << "dense_flow_temporal_unknown_samples,"
+           << "dense_flow_temporal_static_samples,"
+           << "dense_flow_temporal_dynamic_samples,"
+           << "dense_flow_max_residual_px,dense_flow_otsu_threshold_u8,"
+           << "dense_flow_triangle_threshold_u8,"
+           << "dense_flow_low_threshold_u8,"
+           << "dense_flow_high_threshold_u8,dense_flow_low_threshold_px,"
+           << "dense_flow_high_threshold_px,dense_flow_low_pixels,"
+           << "dense_flow_high_pixels,dense_flow_residual_recompute_error_px,"
+           << "dense_flow_normalized_recompute_error,dense_flow_load_ms,"
+           << "dense_flow_validate_ms,dense_flow_total_ms,"
+           << "dense_flow_dynamic_decision,"
+           << "dense_flow_direct_slam_state_mutation,"
+           << "native_initial_enabled,native_initial_available,"
+           << "native_dynamic_state_available,native_image_pixels,"
+           << "native_input_depth_valid_pixels,"
+           << "native_clustering_depth_valid_pixels,"
+           << "native_excluded_far_depth_pixels,"
+           << "native_requested_clusters,native_produced_clusters,"
+           << "native_smallest_region_pixels,"
+           << "native_largest_region_pixels,native_compactness,"
+           << "native_prepare_ms,native_kmeans_ms,"
+           << "native_label_conversion_ms,native_total_ms,"
+           << "native_initial_orb_assigned_count,"
+           << "native_initial_labels_written,native_coarse_to_fine,"
+           << "native_pyramid_levels,native_initialization_source,"
+           << "native_previous_prior_samples,native_grid_fallback_samples,"
+           << "native_previous_prior_coverage,"
+           << "native_temporal_prior_committed,native_level_shapes,"
+           << "native_level_valid_samples,native_level_prior_samples,"
+           << "native_level_grid_fallback_samples,"
+           << "native_level_compactness,native_level_prepare_ms,"
+           << "native_level_kmeans_ms,native_level_label_ms,"
+           << "native_gradient_enabled,native_gradient_available,"
+           << "native_gradient_dynamic_state_available,"
+           << "native_gradient_image_pixels,"
+           << "native_gradient_input_depth_valid_pixels,"
+           << "native_gradient_initial_region_pixels,"
+           << "native_gradient_median_valid_pixels,"
+           << "native_gradient_insufficient_support_pixels,"
+           << "native_gradient_raw_edge_pixels,"
+           << "native_gradient_split_boundary_pixels,"
+           << "native_gradient_split_core_pixels,"
+           << "native_gradient_initial_region_count,"
+           << "native_gradient_split_component_count,"
+           << "native_gradient_split_initial_region_count,"
+           << "native_gradient_fully_consumed_initial_region_count,"
+           << "native_gradient_median_fragmentation,"
+           << "native_gradient_maximum_fragmentation,"
+           << "native_gradient_small_component_count,"
+           << "native_gradient_small_component_pixels,"
+           << "native_gradient_median_filter_ms,"
+           << "native_gradient_edge_ms,native_gradient_components_ms,"
+           << "native_gradient_total_ms,native_gradient_edge_written,"
+           << "native_gradient_split_labels_written,"
+           << "native_gradient_dynamic_decision,"
+           << "native_plane_enabled,native_plane_available,"
+           << "native_plane_dynamic_state_available,"
+           << "native_plane_opencv_substitute,"
+           << "native_plane_image_pixels,"
+           << "native_plane_input_depth_valid_pixels,"
+           << "native_plane_initial_region_pixels,"
+           << "native_plane_pixels,native_plane_count,"
+           << "native_plane_raw_boundary_pixels,"
+           << "native_plane_gradient_overlap_pixels,"
+           << "native_plane_candidate_boundary_pixels,"
+           << "native_plane_gradient_endpoint_pixels,"
+           << "native_plane_boundary_segment_count,"
+           << "native_plane_retained_segment_count,"
+           << "native_plane_unsupported_segment_count,"
+           << "native_plane_retained_boundary_pixels,"
+           << "native_plane_combined_edge_pixels,"
+           << "native_plane_combined_core_pixels,"
+           << "native_plane_initial_region_count,"
+           << "native_plane_combined_component_count,"
+           << "native_plane_split_initial_region_count,"
+           << "native_plane_fully_consumed_initial_region_count,"
+           << "native_plane_maximum_fragmentation,"
+           << "native_plane_extraction_ms,native_plane_boundary_ms,"
+           << "native_plane_endpoint_filter_ms,"
+           << "native_plane_components_ms,native_plane_total_ms,"
+           << "native_plane_raw_boundary_written,"
+           << "native_plane_retained_boundary_written,"
+           << "native_plane_combined_edge_written,"
+           << "native_plane_combined_labels_written,"
+           << "native_plane_dynamic_decision,"
+           << "native_rag_enabled,native_rag_available,"
+           << "native_rag_dynamic_state_available,"
+           << "native_rag_plane_rejection_available,"
+           << "native_rag_image_pixels,native_rag_input_core_pixels,"
+           << "native_rag_output_core_pixels,"
+           << "native_rag_input_component_count,"
+           << "native_rag_output_region_count,native_rag_total_pairs,"
+           << "native_rag_spatial_adjacent_pairs,"
+           << "native_rag_shared_fake_edge_pairs,"
+           << "native_rag_depth_rejected_pairs,"
+           << "native_rag_eligible_pairs,"
+           << "native_rag_high_middle_merges,native_rag_low_merges,"
+           << "native_rag_unmerged_low_regions,"
+           << "native_rag_cross_gradient_merge_violations,"
+           << "native_rag_mean_hist_similarity,"
+           << "native_rag_max_hist_similarity,"
+           << "native_rag_mean_eligible_score,"
+           << "native_rag_max_eligible_score,"
+           << "native_rag_median_group_components,"
+           << "native_rag_max_group_components,"
+           << "native_rag_smallest_region_pixels,"
+           << "native_rag_largest_region_pixels,"
+           << "native_rag_attribute_ms,native_rag_graph_ms,"
+           << "native_rag_merge_ms,native_rag_total_ms,"
+           << "native_rag_labels_written,native_rag_dynamic_decision,"
+           << "native_dynamic_decision,"
+           << "region_dynamic_enabled,region_dynamic_available,"
+           << "region_dynamic_state_available,region_dynamic_failure_reason,"
+           << "region_dynamic_frame_index,region_dynamic_valid_pixels,"
+           << "region_dynamic_unknown_pixels,region_dynamic_above_low_pixels,"
+           << "region_dynamic_high_pixels,region_dynamic_temporal_added_pixels,"
+           << "region_dynamic_region_count,region_dynamic_regions_with_high,"
+           << "region_dynamic_eligible_contours,region_dynamic_valid_seeds,"
+           << "region_dynamic_whole_regions,region_dynamic_partial_regions,"
+           << "region_dynamic_core_pixels,region_dynamic_author_pixels,"
+           << "region_dynamic_valid_dynamic_pixels,region_dynamic_static_pixels,"
+           << "region_dynamic_prepare_ms,region_dynamic_classify_ms,"
+           << "region_dynamic_total_ms,region_dynamic_orb_count,"
+           << "region_dynamic_author_overlap_pixels,"
+           << "region_dynamic_author_union_pixels,"
+           << "region_dynamic_author_overlap_orb_count,"
+           << "region_feature_filter_enabled,"
+           << "region_feature_filter_applied,"
+           << "region_feature_filter_state,"
+           << "region_feature_filter_candidate_features,"
+           << "region_feature_filter_semantic_overlap,"
+           << "region_feature_filter_new_dynamic_features,"
+           << "region_feature_filter_remaining_features,"
+           << "region_feature_filter_actual_removed_associations,"
+           << "region_feature_filter_tracking_fail_open,"
+           << "region_feature_filter_tracking_fail_open_stage,"
+           << "region_feature_filter_tracking_fail_open_cleared_features,"
+           << "region_feature_filter_mapping_flags_restored,"
+           << "region_dynamic_decision,region_dynamic_direct_slam_mutation\n";
+    stream << std::setprecision(15);
+
+    for(std::size_t index=0;
+        index<mvSInStyleShadowDiagnostics.size(); ++index)
+    {
+        const SInStyleShadowRecord &record =
+            mvSInStyleShadowDiagnostics[index];
+        std::vector<std::string> nativeLevelShapes;
+        std::vector<std::size_t> nativeLevelValidSamples;
+        std::vector<std::size_t> nativeLevelPriorSamples;
+        std::vector<std::size_t> nativeLevelGridFallbackSamples;
+        std::vector<double> nativeLevelCompactness;
+        std::vector<double> nativeLevelPrepareMs;
+        std::vector<double> nativeLevelKMeansMs;
+        std::vector<double> nativeLevelLabelMs;
+        for(std::size_t levelIndex=0;
+            levelIndex<record.nativeInitialStats.levels.size(); ++levelIndex)
+        {
+            const SInStyleInitialRegionLevelStats &level =
+                record.nativeInitialStats.levels[levelIndex];
+            std::ostringstream shape;
+            shape << level.level << ":" << level.cols << "x" << level.rows;
+            nativeLevelShapes.push_back(shape.str());
+            nativeLevelValidSamples.push_back(level.validSamples);
+            nativeLevelPriorSamples.push_back(level.priorInitializedSamples);
+            nativeLevelGridFallbackSamples.push_back(
+                level.gridFallbackSamples);
+            nativeLevelCompactness.push_back(level.compactness);
+            nativeLevelPrepareMs.push_back(level.prepareMs);
+            nativeLevelKMeansMs.push_back(level.kmeansMs);
+            nativeLevelLabelMs.push_back(level.labelMs);
+        }
+        stream << record.inputFrameIndex << ","
+               << record.frameId << ","
+               << record.resetEpoch << ","
+               << record.timestamp << ","
+               << record.referenceBackend << ","
+               << record.regionDynamicLabelSource << ","
+               << static_cast<int>(record.stats.referenceAvailable) << ","
+               << static_cast<int>(record.stats.labelsAvailable) << ","
+               << record.stats.pixelCount << ","
+               << record.stats.depthValidPixels << ","
+               << record.stats.rawUnknownPixels << ","
+               << record.stats.rawStaticPixels << ","
+               << record.stats.rawDynamicPixels << ","
+               << record.stats.validPixels << ","
+               << record.stats.staticPixels << ","
+               << record.stats.dynamicPixels << ","
+               << record.stats.unknownPixels << ","
+               << record.stats.positiveLabelCount << ","
+               << record.stats.positiveLabelPixels << ","
+               << record.stats.depthSupportedPositiveLabelPixels << ","
+               << record.stats.positiveLabelComponentCount << ","
+               << record.stats.authorDynamicPixelsOnPositiveLabels << ","
+               << record.stats.authorDynamicPixelsOnLabelZero << ","
+               << record.stats.authorDynamicPixelsWithLabelsUnavailable << ","
+               << record.rawOrbCount << ","
+               << record.authorDynamicMaskHitOnDtOrbSet << ","
+               << record.depthSupportedDynamicOrbCount << ","
+               << record.validOrbCount << ","
+               << record.unknownOrbCount << ","
+               << record.semanticDynamicOrbCount << ","
+               << record.semanticAuthorDynamicOverlapOnDtOrbSet << ","
+               << record.wouldKeepOrbCount << ","
+               << static_cast<int>(record.counterfactualFallbackOnDtOrbSet) << ","
+               << record.counterfactualRemovedOnDtOrbSet << ","
+               << 0 << ","
+               << record.trackingStateAfter << ","
+               << record.runtime.loadMs << ","
+               << record.runtime.stateConversionMs << ","
+               << record.runtime.regionStatisticsMs << ","
+               << record.runtime.totalMs << ","
+               << "shadow_only,none,"
+               << static_cast<int>(record.denseFlowStats.enabled) << ","
+               << static_cast<int>(record.denseFlowStats.available) << ","
+               << static_cast<int>(
+                      record.denseFlowStats.dynamicStateAvailable) << ","
+               << record.denseFlowStats.failureReason << ","
+               << record.denseFlowStats.backend << ","
+               << record.denseFlowStats.frameIndex << ","
+               << record.denseFlowStats.intendedReferenceLag << ","
+               << record.denseFlowStats.referenceIndex << ","
+               << record.denseFlowStats.actualReferenceLag << ","
+               << static_cast<int>(record.denseFlowStats.largeMotion) << ","
+               << record.denseFlowStats.imageScale << ","
+               << record.denseFlowStats.homographySampleCount << ","
+               << record.denseFlowStats.maxObservedFlowPx << ","
+               << static_cast<int>(
+                      record.denseFlowStats.temporalRegionPriorUsed) << ","
+               << record.denseFlowStats.temporalUnknownSamples << ","
+               << record.denseFlowStats.temporalStaticSamples << ","
+               << record.denseFlowStats.temporalDynamicSamples << ","
+               << record.denseFlowStats.maxResidualPx << ","
+               << record.denseFlowStats.otsuThresholdU8 << ","
+               << record.denseFlowStats.triangleThresholdU8 << ","
+               << record.denseFlowStats.lowThresholdU8 << ","
+               << record.denseFlowStats.highThresholdU8 << ","
+               << record.denseFlowStats.lowThresholdPx << ","
+               << record.denseFlowStats.highThresholdPx << ","
+               << record.denseFlowStats.lowPixels << ","
+               << record.denseFlowStats.highPixels << ","
+               << record.denseFlowStats.residualRecomputeMaxAbsPx << ","
+               << record.denseFlowStats.normalizedRecomputeMaxAbs << ","
+               << record.denseFlowStats.loadMs << ","
+               << record.denseFlowStats.validateMs << ","
+               << record.denseFlowStats.totalMs << ","
+               << "none,none,"
+               << static_cast<int>(record.nativeInitialStats.enabled) << ","
+               << static_cast<int>(record.nativeInitialStats.available) << ","
+               << static_cast<int>(
+                      record.nativeInitialStats.dynamicStateAvailable) << ","
+               << record.nativeInitialStats.imagePixels << ","
+               << record.nativeInitialStats.inputDepthValidPixels << ","
+               << record.nativeInitialStats.clusteringDepthValidPixels << ","
+               << record.nativeInitialStats.excludedFarDepthPixels << ","
+               << record.nativeInitialStats.requestedClusters << ","
+               << record.nativeInitialStats.producedClusters << ","
+               << record.nativeInitialStats.smallestRegionPixels << ","
+               << record.nativeInitialStats.largestRegionPixels << ","
+               << record.nativeInitialStats.compactness << ","
+               << record.nativeInitialStats.prepareMs << ","
+               << record.nativeInitialStats.kmeansMs << ","
+               << record.nativeInitialStats.labelConversionMs << ","
+               << record.nativeInitialStats.totalMs << ","
+               << record.nativeInitialOrbAssignedCount << ","
+               << static_cast<int>(record.nativeInitialLabelsWritten) << ","
+               << static_cast<int>(record.nativeInitialStats.coarseToFine)
+               << ","
+               << record.nativeInitialStats.pyramidLevels << ","
+               << record.nativeInitialStats.initializationSource << ","
+               << record.nativeInitialStats.previousPriorSamples << ","
+               << record.nativeInitialStats.gridFallbackSamples << ","
+               << record.nativeInitialStats.previousPriorCoverage << ","
+               << static_cast<int>(
+                      record.nativeInitialStats.temporalPriorCommitted) << ","
+               << JoinDiagnosticValues(nativeLevelShapes) << ","
+               << JoinDiagnosticValues(nativeLevelValidSamples) << ","
+               << JoinDiagnosticValues(nativeLevelPriorSamples) << ","
+               << JoinDiagnosticValues(nativeLevelGridFallbackSamples) << ","
+               << JoinDiagnosticValues(nativeLevelCompactness) << ","
+               << JoinDiagnosticValues(nativeLevelPrepareMs) << ","
+               << JoinDiagnosticValues(nativeLevelKMeansMs) << ","
+               << JoinDiagnosticValues(nativeLevelLabelMs) << ","
+               << static_cast<int>(record.nativeGradientStats.enabled) << ","
+               << static_cast<int>(record.nativeGradientStats.available) << ","
+               << static_cast<int>(
+                      record.nativeGradientStats.dynamicStateAvailable) << ","
+               << record.nativeGradientStats.imagePixels << ","
+               << record.nativeGradientStats.inputDepthValidPixels << ","
+               << record.nativeGradientStats.initialRegionPixels << ","
+               << record.nativeGradientStats.medianValidPixels << ","
+               << record.nativeGradientStats.insufficientSupportPixels << ","
+               << record.nativeGradientStats.rawGradientEdgePixels << ","
+               << record.nativeGradientStats.splitBoundaryPixels << ","
+               << record.nativeGradientStats.splitCorePixels << ","
+               << record.nativeGradientStats.initialRegionCount << ","
+               << record.nativeGradientStats.splitComponentCount << ","
+               << record.nativeGradientStats.splitInitialRegionCount << ","
+               << record.nativeGradientStats.fullyConsumedInitialRegionCount << ","
+               << record.nativeGradientStats.medianFragmentation << ","
+               << record.nativeGradientStats.maximumFragmentation << ","
+               << record.nativeGradientStats.smallComponentCount << ","
+               << record.nativeGradientStats.smallComponentPixels << ","
+               << record.nativeGradientStats.medianFilterMs << ","
+               << record.nativeGradientStats.gradientEdgeMs << ","
+               << record.nativeGradientStats.connectedComponentsMs << ","
+               << record.nativeGradientStats.totalMs << ","
+               << static_cast<int>(record.nativeGradientEdgeWritten) << ","
+               << static_cast<int>(
+                      record.nativeGradientSplitLabelsWritten) << ","
+               << "none,"
+               << static_cast<int>(record.nativePlaneStats.enabled) << ","
+               << static_cast<int>(record.nativePlaneStats.available) << ","
+               << static_cast<int>(
+                      record.nativePlaneStats.dynamicStateAvailable) << ","
+               << static_cast<int>(
+                      record.nativePlaneStats.opencvPlaneSubstitute) << ","
+               << record.nativePlaneStats.imagePixels << ","
+               << record.nativePlaneStats.inputDepthValidPixels << ","
+               << record.nativePlaneStats.initialRegionPixels << ","
+               << record.nativePlaneStats.planePixels << ","
+               << record.nativePlaneStats.planeCount << ","
+               << record.nativePlaneStats.rawPlaneBoundaryPixels << ","
+               << record.nativePlaneStats.gradientOverlapPixels << ","
+               << record.nativePlaneStats.planeCandidateBoundaryPixels << ","
+               << record.nativePlaneStats.gradientEndpointPixels << ","
+               << record.nativePlaneStats.planeBoundarySegmentCount << ","
+               << record.nativePlaneStats.retainedPlaneBoundarySegmentCount
+               << ","
+               << record.nativePlaneStats.unsupportedPlaneBoundarySegmentCount
+               << ","
+               << record.nativePlaneStats.retainedPlaneBoundaryPixels << ","
+               << record.nativePlaneStats.combinedEdgePixels << ","
+               << record.nativePlaneStats.combinedCorePixels << ","
+               << record.nativePlaneStats.initialRegionCount << ","
+               << record.nativePlaneStats.combinedComponentCount << ","
+               << record.nativePlaneStats.splitInitialRegionCount << ","
+               << record.nativePlaneStats.fullyConsumedInitialRegionCount
+               << ","
+               << record.nativePlaneStats.maximumFragmentation << ","
+               << record.nativePlaneStats.planeExtractionMs << ","
+               << record.nativePlaneStats.boundaryBuildMs << ","
+               << record.nativePlaneStats.endpointFilterMs << ","
+               << record.nativePlaneStats.connectedComponentsMs << ","
+               << record.nativePlaneStats.totalMs << ","
+               << static_cast<int>(record.nativePlaneRawBoundaryWritten)
+               << ","
+               << static_cast<int>(record.nativePlaneRetainedBoundaryWritten)
+               << ","
+               << static_cast<int>(record.nativeCombinedEdgeWritten) << ","
+               << static_cast<int>(record.nativeCombinedSplitLabelsWritten)
+               << ","
+               << "none,"
+               << static_cast<int>(record.nativeRAGStats.enabled) << ","
+               << static_cast<int>(record.nativeRAGStats.available) << ","
+               << static_cast<int>(
+                      record.nativeRAGStats.dynamicStateAvailable) << ","
+               << static_cast<int>(
+                      record.nativeRAGStats.planeRejectionAvailable) << ","
+               << record.nativeRAGStats.imagePixels << ","
+               << record.nativeRAGStats.inputCorePixels << ","
+               << record.nativeRAGStats.outputCorePixels << ","
+               << record.nativeRAGStats.inputComponentCount << ","
+               << record.nativeRAGStats.outputRegionCount << ","
+               << record.nativeRAGStats.totalPairCount << ","
+               << record.nativeRAGStats.spatialAdjacentPairCount << ","
+               << record.nativeRAGStats.sharedFakeEdgePairCount << ","
+               << record.nativeRAGStats.depthRejectedPairCount << ","
+               << record.nativeRAGStats.eligiblePairCount << ","
+               << record.nativeRAGStats.highMiddleMergeCount << ","
+               << record.nativeRAGStats.lowScoreMergeCount << ","
+               << record.nativeRAGStats.unmergedLowScoreRegionCount << ","
+               << record.nativeRAGStats.crossGradientMergeViolationCount
+               << ","
+               << record.nativeRAGStats.meanHistogramSimilarityOnAdjacentPairs
+               << ","
+               << record.nativeRAGStats.maximumHistogramSimilarityOnAdjacentPairs
+               << ","
+               << record.nativeRAGStats.meanTotalScoreOnEligiblePairs << ","
+               << record.nativeRAGStats.maximumTotalScoreOnEligiblePairs << ","
+               << record.nativeRAGStats.medianMergedGroupComponents << ","
+               << record.nativeRAGStats.maximumMergedGroupComponents << ","
+               << record.nativeRAGStats.smallestMergedRegionPixels << ","
+               << record.nativeRAGStats.largestMergedRegionPixels << ","
+               << record.nativeRAGStats.attributeMs << ","
+               << record.nativeRAGStats.ragMs << ","
+               << record.nativeRAGStats.mergeMs << ","
+               << record.nativeRAGStats.totalMs << ","
+               << static_cast<int>(record.nativeRAGMergedLabelsWritten) << ","
+               << "none,"
+               << "none,"
+               << static_cast<int>(record.regionDynamicStats.enabled) << ","
+               << static_cast<int>(record.regionDynamicStats.available) << ","
+               << static_cast<int>(
+                      record.regionDynamicStats.dynamicStateAvailable) << ","
+               << record.regionDynamicStats.failureReason << ","
+               << record.regionDynamicStats.frameIndex << ","
+               << record.regionDynamicStats.validRegionPixels << ","
+               << record.regionDynamicStats.unknownPixels << ","
+               << record.regionDynamicStats.lowResidualPixels << ","
+               << record.regionDynamicStats.highResidualPixels << ","
+               << record.regionDynamicStats.temporalHighPixelsAdded << ","
+               << record.regionDynamicStats.regionCount << ","
+               << record.regionDynamicStats.regionsWithHighSupport << ","
+               << record.regionDynamicStats.eligibleContourCount << ","
+               << record.regionDynamicStats.validSeedContourCount << ","
+               << record.regionDynamicStats.wholeDynamicRegionCount << ","
+               << record.regionDynamicStats.partialDynamicRegionCount << ","
+               << record.regionDynamicStats.dynamicPixelsBeforeDilation << ","
+               << record.regionDynamicStats.authorStyleDynamicPixels << ","
+               << record.regionDynamicStats.depthSupportedDynamicPixels << ","
+               << record.regionDynamicStats.staticPixels << ","
+               << record.regionDynamicStats.prepareMs << ","
+               << record.regionDynamicStats.classifyMs << ","
+               << record.regionDynamicStats.totalMs << ","
+               << record.regionDynamicOrbCount << ","
+               << record.regionDynamicAuthorOverlapPixels << ","
+               << record.regionDynamicAuthorUnionPixels << ","
+               << record.regionDynamicAuthorOverlapOrbCount << ","
+               << static_cast<int>(record.regionFeatureFilterEnabled) << ","
+               << static_cast<int>(record.regionFeatureFilterApplied) << ","
+               << record.regionFeatureFilterState << ","
+               << record.regionFeatureFilterCandidateFeatures << ","
+               << record.regionFeatureFilterSemanticOverlap << ","
+               << record.regionFeatureFilterNewDynamicFeatures << ","
+               << record.regionFeatureFilterRemainingFeatures << ","
+               << record.regionFeatureFilterActualRemovedAssociations << ","
+               << static_cast<int>(
+                      record.regionFeatureFilterTrackingFailOpen) << ","
+               << record.regionFeatureFilterTrackingFailOpenStage << ","
+               << record.
+                      regionFeatureFilterTrackingFailOpenClearedFeatures
+               << ","
+               << static_cast<int>(
+                      record.regionFeatureFilterMappingFlagsRestored) << ","
+               << (record.regionFeatureFilterTrackingFailOpen ?
+                      "region_feature_filter_tracking_fail_open" :
+                      (record.regionFeatureFilterApplied ?
+                      "region_feature_filter" :
+                      (record.regionDynamicStats.available ?
+                           "shadow_only" : "none"))) << ","
+               << (record.regionFeatureFilterTrackingFailOpen ?
+                      "mapping_dynamic_flags_only" :
+                      (record.regionFeatureFilterApplied ?
+                      "frame_dynamic_flags" : "none")) << "\n";
+    }
+    stream.close();
+    cout << "[SIn S1] saved " << mvSInStyleShadowDiagnostics.size()
+         << " shadow rows to " << mSInStyleShadowCsvPath << endl;
+}
+
+void Tracking::SaveSInStyleDepthFilterDiagnostics()
+{
+    if(mSInStyleDepthFilterCsvPath.empty() ||
+       mvSInStyleDepthFilterDiagnostics.empty())
+    {
+        return;
+    }
+
+    ofstream stream(mSInStyleDepthFilterCsvPath.c_str());
+    if(!stream.is_open())
+    {
+        cerr << "[SIn S3] failed to open depth-filter CSV: "
+             << mSInStyleDepthFilterCsvPath << endl;
+        return;
+    }
+
+    stream << "input_index,frame,timestamp,enabled,available,mask_mode,"
+           << "state,geometry_evidence_available,input_valid_depth_pixels,"
+           << "semantic_dynamic_pixels,geometry_dynamic_pixels,"
+           << "union_dynamic_pixels,rejected_valid_depth_pixels,"
+           << "output_valid_depth_pixels,filter_ms,tracking_state_after,"
+           << "mapping_output_available,mask_written,"
+           << "tracking_state_mutation\n";
+    stream << std::setprecision(17);
+    for(std::size_t index=0;
+        index<mvSInStyleDepthFilterDiagnostics.size(); ++index)
+    {
+        const SInStyleDepthFilterRecord &record =
+            mvSInStyleDepthFilterDiagnostics[index];
+        const SInStyleDepthFilterStats &stats = record.stats;
+        stream << record.inputFrameIndex << ","
+               << record.frameId << ","
+               << record.timestamp << ","
+               << stats.enabled << ","
+               << stats.available << ","
+               << stats.maskMode << ","
+               << stats.state << ","
+               << stats.geometryEvidenceAvailable << ","
+               << stats.inputValidDepthPixels << ","
+               << stats.semanticDynamicPixels << ","
+               << stats.geometryDynamicPixels << ","
+               << stats.unionDynamicPixels << ","
+               << stats.rejectedValidDepthPixels << ","
+               << stats.outputValidDepthPixels << ","
+               << stats.totalMs << ","
+               << record.trackingStateAfter << ","
+               << record.mappingOutputAvailable << ","
+               << record.maskWritten << ",none\n";
+    }
+    cout << "[SIn S3] depth-filter diagnostics saved: "
+         << mSInStyleDepthFilterCsvPath << endl;
+}
+
+cv::Mat Tracking::GetCurrentDynamicDepthMaskForMapping() const
+{
+    if(!mbCurrentSInDepthMappingAdmissible)
+        return cv::Mat();
+    return mCurrentSInDepthFilterResult.dynamicDepthMask.clone();
+}
+
+cv::Mat Tracking::GetCurrentStaticDepthForMapping() const
+{
+    if(!mbCurrentSInDepthMappingAdmissible)
+        return cv::Mat();
+    return mCurrentSInDepthFilterResult.staticDepthMeters.clone();
 }
 
 void Tracking::SaveGeometryPoseDiagnostics()
@@ -3720,6 +5022,17 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
     if(!std::isfinite(timestamp))
         throw std::invalid_argument("RGB-D timestamp must be finite");
 
+    cv::Mat sinStyleDenseFlowGray;
+    if(mbSInStyleDenseFlowResidualEnabled)
+    {
+        if(imRGB.channels()==3)
+            cvtColor(imRGB,sinStyleDenseFlowGray,CV_BGR2GRAY);
+        else if(imRGB.channels()==4)
+            cvtColor(imRGB,sinStyleDenseFlowGray,CV_BGRA2GRAY);
+        else
+            sinStyleDenseFlowGray = imRGB;
+    }
+
     mImGray = imRGB;
     cv::Mat imDepth = imD;
 
@@ -3762,6 +5075,10 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
         cv::compare(mask,0,semanticMask,cv::CMP_NE);
     }
     UpdateDynamicFeaturesFromMask(mCurrentFrame,semanticMask);
+    mCurrentSInGeometryDynamicMask.release();
+    mbCurrentSInGeometryEvidenceAvailable = false;
+    RunSInStyleRegionShadow(imDepth,sinStyleDenseFlowGray);
+    RunSInStyleDepthFilter(imDepth,semanticMask);
 
     // DT-SLAM: 传递mask和检测列表给FrameDrawer用于Pangolin可视化
     mpFrameDrawer->UpdateMask(mCurrentFrame.mSemanticMask);
@@ -3772,6 +5089,15 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const c
         mvJiInitialObservations.clear();
     }
     Track();
+    FinalizeSInStyleDepthFilterForMapping();
+    if(mbSInStyleShadowEnabled &&
+       !mvSInStyleShadowDiagnostics.empty() &&
+       mvSInStyleShadowDiagnostics.back().inputFrameIndex+1==
+           mnSInStyleInputFrameIndex)
+    {
+        mvSInStyleShadowDiagnostics.back().trackingStateAfter =
+            static_cast<int>(mState);
+    }
     if(mbJiGeometryReprojectionStatsEnabled && mState!=OK)
     {
         mJiInitialTcw.release();
@@ -3860,6 +5186,668 @@ void Tracking::UpdateDynamicFeaturesFromMask(Frame &frame, const cv::Mat &mask)
     }
 }
 
+void Tracking::RunSInStyleDepthFilter(
+    const cv::Mat &depthMeters, const cv::Mat &semanticDynamicMask)
+{
+    mCurrentSInDepthFilterResult = SInStyleDepthFilterResult();
+    mbCurrentSInDepthMappingAdmissible = false;
+    if(!mbSInStyleDepthFilterEnabled)
+        return;
+
+    mCurrentSInDepthFilterResult = mSInStyleDepthFilter.Filter(
+        depthMeters,semanticDynamicMask,mCurrentSInGeometryDynamicMask,
+        mbCurrentSInGeometryEvidenceAvailable);
+
+    SInStyleDepthFilterRecord record;
+    record.inputFrameIndex = mnSInStyleDepthFilterInputFrameIndex++;
+    record.frameId = mCurrentFrame.mnId;
+    record.timestamp = mCurrentFrame.mTimeStamp;
+    record.stats = mCurrentSInDepthFilterResult.stats;
+    record.trackingStateAfter = -1;
+    record.mappingOutputAvailable = false;
+    record.maskWritten = false;
+    mvSInStyleDepthFilterDiagnostics.push_back(record);
+}
+
+void Tracking::FinalizeSInStyleDepthFilterForMapping()
+{
+    if(!mbSInStyleDepthFilterEnabled)
+        return;
+
+    mbCurrentSInDepthMappingAdmissible =
+        mCurrentSInDepthFilterResult.stats.available &&
+        mState==OK && !mCurrentFrame.mTcw.empty() &&
+        !mCurrentSInDepthFilterResult.dynamicDepthMask.empty() &&
+        !mCurrentSInDepthFilterResult.staticDepthMeters.empty();
+
+    if(mvSInStyleDepthFilterDiagnostics.empty() ||
+       mvSInStyleDepthFilterDiagnostics.back().frameId!=mCurrentFrame.mnId)
+    {
+        return;
+    }
+
+    SInStyleDepthFilterRecord &record =
+        mvSInStyleDepthFilterDiagnostics.back();
+    record.trackingStateAfter = static_cast<int>(mState);
+    record.mappingOutputAvailable =
+        mbCurrentSInDepthMappingAdmissible;
+
+    if(mbCurrentSInDepthMappingAdmissible &&
+       !mSInStyleDepthFilterOutputDir.empty())
+    {
+        std::ostringstream path;
+        path << mSInStyleDepthFilterOutputDir;
+        if(mSInStyleDepthFilterOutputDir[
+               mSInStyleDepthFilterOutputDir.size()-1]!='/')
+        {
+            path << "/";
+        }
+        path << "frame_" << std::setfill('0') << std::setw(6)
+             << record.inputFrameIndex << "_dynamic_depth_mask.png";
+        try
+        {
+            record.maskWritten = cv::imwrite(
+                path.str(),mCurrentSInDepthFilterResult.dynamicDepthMask);
+            if(!record.maskWritten)
+            {
+                cerr << "[SIn S3] dynamic-depth mask was not written: "
+                     << path.str() << endl;
+            }
+        }
+        catch(const cv::Exception &error)
+        {
+            cerr << "[SIn S3] dynamic-depth mask write failed: "
+                 << error.what() << endl;
+        }
+    }
+
+    if(mnSInStyleLogEveryN>0 &&
+       (mCurrentFrame.mnId%
+        static_cast<long unsigned int>(mnSInStyleLogEveryN)==0))
+    {
+        cout << "[SIn S3] frame=" << mCurrentFrame.mnId
+             << " mode=" << record.stats.maskMode
+             << " state=" << record.stats.state
+             << " geometry_available="
+             << record.stats.geometryEvidenceAvailable
+             << " rejected_valid_depth="
+             << record.stats.rejectedValidDepthPixels
+             << " output_valid_depth="
+             << record.stats.outputValidDepthPixels
+             << " mapping_output_available="
+             << record.mappingOutputAvailable
+             << " filter_ms=" << record.stats.totalMs
+             << " tracking_state_mutation=none" << endl;
+    }
+}
+
+void Tracking::RunSInStyleRegionShadow(
+    const cv::Mat &depthMeters, const cv::Mat &denseFlowGray)
+{
+    if(!mbSInStyleShadowEnabled)
+        return;
+
+    const SInStyleShadowResult result = mSInStyleDetector.Process(
+        mImGray,depthMeters,mnSInStyleInputFrameIndex,
+        mCurrentFrame.mTimeStamp);
+    const SInStyleDenseFlowResidualResult denseFlowResult =
+        mSInStyleDenseFlowResidualEstimator.Process(
+            mnSInStyleInputFrameIndex,denseFlowGray);
+    const SInStyleInitialRegionResult nativeInitialResult =
+        mSInStyleInitialRegionClusterer.Compute(
+            depthMeters,mnSInStyleInputFrameIndex);
+    const SInStyleGradientSplitResult nativeGradientResult =
+        mSInStyleGradientRegionSplitter.Compute(
+            depthMeters,nativeInitialResult.labels);
+    const SInStylePlaneEdgeSplitResult nativePlaneResult =
+        mSInStylePlaneEdgeRegionSplitter.Compute(
+            depthMeters,nativeInitialResult.labels,
+            nativeGradientResult.rawGradientEdgeMask);
+    const cv::Mat &ragSplitLabels = nativePlaneResult.stats.available ?
+        nativePlaneResult.combinedCoreLabels :
+        nativeGradientResult.splitCoreLabels;
+    const cv::Mat &ragRealEdgeMask = nativePlaneResult.stats.available ?
+        nativePlaneResult.combinedEdgeMask :
+        nativeGradientResult.rawGradientEdgeMask;
+    const SInStyleRAGMergeResult nativeRAGResult =
+        mSInStyleRAGRegionMerger.Compute(
+            depthMeters,nativeInitialResult.labels,
+            ragSplitLabels,ragRealEdgeMask);
+    const cv::Mat &regionDecisionLabels =
+        mSInStyleRegionDynamicLabelSource=="native_rag" ?
+        nativeRAGResult.mergedLabels : result.regionLabels;
+    const cv::Mat &regionDecisionValidity =
+        mSInStyleRegionDynamicLabelSource=="native_rag" ?
+        nativeInitialResult.validMask : result.referenceRegionValidMask;
+    const SInStyleRegionDynamicResult regionDynamicResult =
+        mSInStyleRegionDynamicClassifier.Compute(
+            mnSInStyleInputFrameIndex,regionDecisionLabels,
+            regionDecisionValidity,
+            denseFlowResult.lowResidualMask,
+            denseFlowResult.highResidualMask);
+    if(regionDynamicResult.stats.available &&
+       regionDynamicResult.stats.dynamicStateAvailable &&
+       !regionDynamicResult.dynamicMask.empty())
+    {
+        mCurrentSInGeometryDynamicMask =
+            regionDynamicResult.dynamicMask.clone();
+        mbCurrentSInGeometryEvidenceAvailable = true;
+    }
+    if(regionDynamicResult.stats.available)
+    {
+        mSInStyleDenseFlowResidualEstimator.CommitTemporalRegionPrior(
+            mnSInStyleInputFrameIndex,
+            regionDynamicResult.rawStateMask,
+            regionDecisionLabels);
+    }
+
+    SInStyleShadowRecord record;
+    record.inputFrameIndex = mnSInStyleInputFrameIndex;
+    record.frameId = mCurrentFrame.mnId;
+    record.resetEpoch = mnSInStyleResetEpoch;
+    record.timestamp = mCurrentFrame.mTimeStamp;
+    record.referenceBackend = mSInStyleReferenceBackend;
+    record.regionDynamicLabelSource =
+        mSInStyleRegionDynamicLabelSource;
+    record.stats = result.stats;
+    record.runtime = result.runtime;
+    record.nativeInitialStats = nativeInitialResult.stats;
+    record.nativeGradientStats = nativeGradientResult.stats;
+    record.nativePlaneStats = nativePlaneResult.stats;
+    record.nativeRAGStats = nativeRAGResult.stats;
+    record.denseFlowStats = denseFlowResult.stats;
+    record.regionDynamicStats = regionDynamicResult.stats;
+    record.regionDynamicOrbCount = 0;
+    record.regionDynamicAuthorOverlapPixels = 0;
+    record.regionDynamicAuthorUnionPixels = 0;
+    record.regionDynamicAuthorOverlapOrbCount = 0;
+    if(regionDynamicResult.stats.available &&
+       result.stats.referenceAvailable)
+    {
+        cv::Mat overlap;
+        cv::Mat unionMask;
+        cv::bitwise_and(regionDynamicResult.authorStyleDynamicMask,
+                        result.authorDynamicMask,overlap);
+        cv::bitwise_or(regionDynamicResult.authorStyleDynamicMask,
+                       result.authorDynamicMask,unionMask);
+        record.regionDynamicAuthorOverlapPixels =
+            static_cast<std::size_t>(cv::countNonZero(overlap));
+        record.regionDynamicAuthorUnionPixels =
+            static_cast<std::size_t>(cv::countNonZero(unionMask));
+    }
+    if(regionDynamicResult.stats.available &&
+       !mSInStyleRegionDynamicOutputDir.empty())
+    {
+        std::ostringstream prefix;
+        prefix << mSInStyleRegionDynamicOutputDir;
+        if(mSInStyleRegionDynamicOutputDir[
+               mSInStyleRegionDynamicOutputDir.size()-1]!='/')
+        {
+            prefix << "/";
+        }
+        prefix << "frame_" << std::setfill('0') << std::setw(6)
+               << mnSInStyleInputFrameIndex;
+        try
+        {
+            cv::imwrite(prefix.str()+"_region_valid.png",
+                        regionDynamicResult.validRegionMask);
+            cv::imwrite(prefix.str()+"_region_core.png",
+                        regionDynamicResult.filledDynamicMaskBeforeDilation);
+            cv::imwrite(prefix.str()+"_region_author_style.png",
+                        regionDynamicResult.authorStyleDynamicMask);
+            cv::imwrite(prefix.str()+"_region_valid_dynamic.png",
+                        regionDynamicResult.dynamicMask);
+            cv::imwrite(prefix.str()+"_region_low_support.png",
+                        regionDynamicResult.lowResidualSupportMask);
+        }
+        catch(const cv::Exception &error)
+        {
+            cerr << "[SIn S1] region dynamic audit write failed: "
+                 << error.what() << endl;
+        }
+    }
+    record.nativeInitialOrbAssignedCount = 0;
+    record.nativeInitialLabelsWritten = false;
+    record.nativeGradientEdgeWritten = false;
+    record.nativeGradientSplitLabelsWritten = false;
+    record.nativePlaneRawBoundaryWritten = false;
+    record.nativePlaneRetainedBoundaryWritten = false;
+    record.nativeCombinedEdgeWritten = false;
+    record.nativeCombinedSplitLabelsWritten = false;
+    record.nativeRAGMergedLabelsWritten = false;
+    record.rawOrbCount = static_cast<std::size_t>(mCurrentFrame.N);
+    record.authorDynamicMaskHitOnDtOrbSet = 0;
+    record.depthSupportedDynamicOrbCount = 0;
+    record.validOrbCount = 0;
+    record.unknownOrbCount = 0;
+    record.semanticDynamicOrbCount = 0;
+    record.semanticAuthorDynamicOverlapOnDtOrbSet = 0;
+    record.regionFeatureFilterEnabled =
+        mbSInStyleRegionFeatureFilterEnabled;
+    record.regionFeatureFilterApplied = false;
+    record.regionFeatureFilterState =
+        mbSInStyleRegionFeatureFilterEnabled ?
+            "not_evaluated" : "disabled";
+    record.regionFeatureFilterCandidateFeatures = 0;
+    record.regionFeatureFilterSemanticOverlap = 0;
+    record.regionFeatureFilterNewDynamicFeatures = 0;
+    record.regionFeatureFilterRemainingFeatures =
+        static_cast<std::size_t>(mCurrentFrame.N);
+    record.regionFeatureFilterActualRemovedAssociations = 0;
+    record.regionFeatureFilterTrackingFailOpen = false;
+    record.regionFeatureFilterTrackingFailOpenStage = "none";
+    record.regionFeatureFilterTrackingFailOpenClearedFeatures = 0;
+    record.regionFeatureFilterMappingFlagsRestored = false;
+    mvbCurrentSInRegionDynamicFeatures.assign(
+        static_cast<std::size_t>(mCurrentFrame.N),0);
+    mvbCurrentSInRegionNewDynamicFeatures.assign(
+        static_cast<std::size_t>(mCurrentFrame.N),0);
+    mvbCurrentSInRegionRemovedAssociations.assign(
+        static_cast<std::size_t>(mCurrentFrame.N),0);
+    mbCurrentSInRegionTrackingFailOpen = false;
+
+    for(int index=0; index<mCurrentFrame.N; ++index)
+    {
+        const int u = static_cast<int>(mCurrentFrame.mvKeys[index].pt.x);
+        const int v = static_cast<int>(mCurrentFrame.mvKeys[index].pt.y);
+        const bool inImage =
+            u>=0 && u<result.dynamicMask.cols &&
+            v>=0 && v<result.dynamicMask.rows;
+        const bool geometryDynamic =
+            inImage && result.dynamicMask.at<unsigned char>(v,u)!=0;
+        const bool authorDynamic =
+            inImage && result.authorDynamicMask.at<unsigned char>(v,u)!=0;
+        const bool geometryValid =
+            inImage && result.validMask.at<unsigned char>(v,u)!=0;
+        const bool semanticDynamic =
+            index<static_cast<int>(mCurrentFrame.mvbSemanticDynamic.size()) &&
+            mCurrentFrame.mvbSemanticDynamic[index]!=0;
+
+        if(authorDynamic)
+            ++record.authorDynamicMaskHitOnDtOrbSet;
+        if(geometryDynamic)
+            ++record.depthSupportedDynamicOrbCount;
+        if(geometryValid)
+            ++record.validOrbCount;
+        else
+            ++record.unknownOrbCount;
+        if(semanticDynamic)
+            ++record.semanticDynamicOrbCount;
+        if(semanticDynamic && authorDynamic)
+            ++record.semanticAuthorDynamicOverlapOnDtOrbSet;
+        if(u>=0 && u<regionDynamicResult.dynamicMask.cols &&
+           v>=0 && v<regionDynamicResult.dynamicMask.rows &&
+           regionDynamicResult.dynamicMask.at<unsigned char>(v,u)!=0)
+        {
+            mvbCurrentSInRegionDynamicFeatures[
+                static_cast<std::size_t>(index)] = 1;
+            ++record.regionDynamicOrbCount;
+            ++record.regionFeatureFilterCandidateFeatures;
+            if(semanticDynamic)
+                ++record.regionFeatureFilterSemanticOverlap;
+            if(authorDynamic)
+                ++record.regionDynamicAuthorOverlapOrbCount;
+        }
+
+        if(u>=0 && u<nativeInitialResult.labels.cols &&
+           v>=0 && v<nativeInitialResult.labels.rows &&
+           nativeInitialResult.labels.at<int>(v,u)>0)
+        {
+            ++record.nativeInitialOrbAssignedCount;
+        }
+    }
+
+    if(mbSInStyleRegionFeatureFilterEnabled)
+    {
+        if(!regionDynamicResult.stats.available ||
+           !regionDynamicResult.stats.dynamicStateAvailable)
+        {
+            record.regionFeatureFilterState =
+                "region_unavailable_fail_open";
+        }
+        else if(record.regionFeatureFilterCandidateFeatures==0)
+        {
+            record.regionFeatureFilterState = "no_candidates";
+        }
+        else
+        {
+            std::size_t combinedDynamic = 0;
+            for(int index=0; index<mCurrentFrame.N; ++index)
+            {
+                const bool semanticOrExisting =
+                    index<static_cast<int>(mCurrentFrame.mvbDynamic.size()) &&
+                    mCurrentFrame.mvbDynamic[index]!=0;
+                const bool geometry =
+                    mvbCurrentSInRegionDynamicFeatures[
+                        static_cast<std::size_t>(index)]!=0;
+                if(semanticOrExisting || geometry)
+                    ++combinedDynamic;
+            }
+            const std::size_t featureCount =
+                static_cast<std::size_t>(mCurrentFrame.N);
+            const std::size_t remainingWithGeometry =
+                combinedDynamic<=featureCount ?
+                    featureCount-combinedDynamic : 0;
+            if(remainingWithGeometry<static_cast<std::size_t>(
+                   mnSInStyleRegionFeatureFilterMinimumRemainingFeatures))
+            {
+                record.regionFeatureFilterState =
+                    "minimum_remaining_features_fail_open";
+            }
+            else
+            {
+                for(int index=0; index<mCurrentFrame.N; ++index)
+                {
+                    if(mvbCurrentSInRegionDynamicFeatures[
+                           static_cast<std::size_t>(index)]==0)
+                    {
+                        continue;
+                    }
+                    if(mCurrentFrame.mvbDynamic[index]==0)
+                    {
+                        mCurrentFrame.mvbDynamic[index] = 1;
+                        mvbCurrentSInRegionNewDynamicFeatures[
+                            static_cast<std::size_t>(index)] = 1;
+                        ++record.regionFeatureFilterNewDynamicFeatures;
+                    }
+                }
+                record.regionFeatureFilterApplied =
+                    record.regionFeatureFilterNewDynamicFeatures>0;
+                record.regionFeatureFilterState =
+                    record.regionFeatureFilterApplied ?
+                        "applied" : "semantic_overlap_only";
+            }
+        }
+
+        std::size_t remaining = 0;
+        for(int index=0; index<mCurrentFrame.N; ++index)
+        {
+            if(index>=static_cast<int>(mCurrentFrame.mvbDynamic.size()) ||
+               mCurrentFrame.mvbDynamic[index]==0)
+            {
+                ++remaining;
+            }
+        }
+        record.regionFeatureFilterRemainingFeatures = remaining;
+    }
+
+    if(nativeInitialResult.stats.available &&
+       !mSInStyleNativeInitialOutputDir.empty())
+    {
+        cv::Mat encodedLabels(
+            nativeInitialResult.labels.size(),CV_16UC1,cv::Scalar(0));
+        for(int row=0; row<nativeInitialResult.labels.rows; ++row)
+        {
+            const int *source = nativeInitialResult.labels.ptr<int>(row);
+            unsigned short *destination =
+                encodedLabels.ptr<unsigned short>(row);
+            for(int col=0; col<nativeInitialResult.labels.cols; ++col)
+            {
+                if(source[col]>0 &&
+                   source[col]<=static_cast<int>(
+                       std::numeric_limits<unsigned short>::max()))
+                {
+                    destination[col] =
+                        static_cast<unsigned short>(source[col]);
+                }
+            }
+        }
+        std::ostringstream path;
+        path << mSInStyleNativeInitialOutputDir;
+        if(mSInStyleNativeInitialOutputDir[
+               mSInStyleNativeInitialOutputDir.size()-1]!='/')
+        {
+            path << "/";
+        }
+        path << "frame_" << std::setfill('0') << std::setw(6)
+             << mnSInStyleInputFrameIndex << "_native_initial_labels.png";
+        try
+        {
+            record.nativeInitialLabelsWritten =
+                cv::imwrite(path.str(),encodedLabels);
+        }
+        catch(const cv::Exception &error)
+        {
+            cerr << "[SIn S1] native initial label write failed: "
+                 << error.what() << endl;
+        }
+    }
+
+    if(nativeGradientResult.stats.available &&
+       !mSInStyleNativeGradientOutputDir.empty())
+    {
+        std::ostringstream edgePath;
+        edgePath << mSInStyleNativeGradientOutputDir;
+        if(mSInStyleNativeGradientOutputDir[
+               mSInStyleNativeGradientOutputDir.size()-1]!='/')
+            edgePath << "/";
+        edgePath << "frame_" << std::setfill('0') << std::setw(6)
+                 << mnSInStyleInputFrameIndex
+                 << "_native_gradient_edge.png";
+        try
+        {
+            record.nativeGradientEdgeWritten = cv::imwrite(
+                edgePath.str(),nativeGradientResult.rawGradientEdgeMask);
+        }
+        catch(const cv::Exception &error)
+        {
+            cerr << "[SIn S1] native gradient edge write failed: "
+                 << error.what() << endl;
+        }
+
+        if(nativeGradientResult.stats.splitComponentCount<=
+           static_cast<int>(std::numeric_limits<unsigned short>::max()))
+        {
+            cv::Mat encodedLabels(
+                nativeGradientResult.splitCoreLabels.size(),
+                CV_16UC1,cv::Scalar(0));
+            for(int row=0;
+                row<nativeGradientResult.splitCoreLabels.rows; ++row)
+            {
+                const int *source =
+                    nativeGradientResult.splitCoreLabels.ptr<int>(row);
+                unsigned short *destination =
+                    encodedLabels.ptr<unsigned short>(row);
+                for(int col=0;
+                    col<nativeGradientResult.splitCoreLabels.cols; ++col)
+                {
+                    if(source[col]>0)
+                        destination[col] =
+                            static_cast<unsigned short>(source[col]);
+                }
+            }
+            std::ostringstream labelPath;
+            labelPath << mSInStyleNativeGradientOutputDir;
+            if(mSInStyleNativeGradientOutputDir[
+                   mSInStyleNativeGradientOutputDir.size()-1]!='/')
+                labelPath << "/";
+            labelPath << "frame_" << std::setfill('0') << std::setw(6)
+                      << mnSInStyleInputFrameIndex
+                      << "_native_gradient_split_labels.png";
+            try
+            {
+                record.nativeGradientSplitLabelsWritten = cv::imwrite(
+                    labelPath.str(),encodedLabels);
+            }
+            catch(const cv::Exception &error)
+            {
+                cerr << "[SIn S1] native gradient label write failed: "
+                     << error.what() << endl;
+            }
+        }
+    }
+
+    if(nativePlaneResult.stats.available &&
+       !mSInStyleNativePlaneOutputDir.empty())
+    {
+        std::string planePrefix = mSInStyleNativePlaneOutputDir;
+        if(planePrefix[planePrefix.size()-1]!='/')
+            planePrefix += "/";
+        std::ostringstream baseName;
+        baseName << planePrefix << "frame_" << std::setfill('0')
+                 << std::setw(6) << mnSInStyleInputFrameIndex;
+        try
+        {
+            record.nativePlaneRawBoundaryWritten = cv::imwrite(
+                baseName.str()+"_native_plane_raw_boundary.png",
+                nativePlaneResult.rawPlaneBoundaryMask);
+            record.nativePlaneRetainedBoundaryWritten = cv::imwrite(
+                baseName.str()+"_native_plane_retained_boundary.png",
+                nativePlaneResult.retainedPlaneBoundaryMask);
+            record.nativeCombinedEdgeWritten = cv::imwrite(
+                baseName.str()+"_native_combined_edge.png",
+                nativePlaneResult.combinedEdgeMask);
+        }
+        catch(const cv::Exception &error)
+        {
+            cerr << "[SIn S1] native plane edge write failed: "
+                 << error.what() << endl;
+        }
+
+        if(nativePlaneResult.stats.combinedComponentCount<=
+           static_cast<int>(std::numeric_limits<unsigned short>::max()))
+        {
+            cv::Mat encodedLabels(
+                nativePlaneResult.combinedCoreLabels.size(),
+                CV_16UC1,cv::Scalar(0));
+            for(int row=0;
+                row<nativePlaneResult.combinedCoreLabels.rows; ++row)
+            {
+                const int *source =
+                    nativePlaneResult.combinedCoreLabels.ptr<int>(row);
+                unsigned short *destination =
+                    encodedLabels.ptr<unsigned short>(row);
+                for(int col=0;
+                    col<nativePlaneResult.combinedCoreLabels.cols; ++col)
+                {
+                    if(source[col]>0)
+                        destination[col] =
+                            static_cast<unsigned short>(source[col]);
+                }
+            }
+            try
+            {
+                record.nativeCombinedSplitLabelsWritten = cv::imwrite(
+                    baseName.str()+"_native_combined_split_labels.png",
+                    encodedLabels);
+            }
+            catch(const cv::Exception &error)
+            {
+                cerr << "[SIn S1] native combined label write failed: "
+                     << error.what() << endl;
+            }
+        }
+    }
+
+    if(nativeRAGResult.stats.available &&
+       !mSInStyleNativeRAGOutputDir.empty() &&
+       nativeRAGResult.stats.outputRegionCount<=
+           static_cast<int>(std::numeric_limits<unsigned short>::max()))
+    {
+        cv::Mat encodedLabels(
+            nativeRAGResult.mergedLabels.size(),CV_16UC1,cv::Scalar(0));
+        for(int row=0; row<nativeRAGResult.mergedLabels.rows; ++row)
+        {
+            const int *source = nativeRAGResult.mergedLabels.ptr<int>(row);
+            unsigned short *destination =
+                encodedLabels.ptr<unsigned short>(row);
+            for(int col=0; col<nativeRAGResult.mergedLabels.cols; ++col)
+            {
+                if(source[col]>0)
+                    destination[col] =
+                        static_cast<unsigned short>(source[col]);
+            }
+        }
+        std::ostringstream labelPath;
+        labelPath << mSInStyleNativeRAGOutputDir;
+        if(mSInStyleNativeRAGOutputDir[
+               mSInStyleNativeRAGOutputDir.size()-1]!='/')
+        {
+            labelPath << "/";
+        }
+        labelPath << "frame_" << std::setfill('0') << std::setw(6)
+                  << mnSInStyleInputFrameIndex
+                  << "_native_rag_merged_labels.png";
+        try
+        {
+            record.nativeRAGMergedLabelsWritten = cv::imwrite(
+                labelPath.str(),encodedLabels);
+        }
+        catch(const cv::Exception &error)
+        {
+            cerr << "[SIn S1] native RAG label write failed: "
+                 << error.what() << endl;
+        }
+    }
+
+    record.wouldKeepOrbCount =
+        record.rawOrbCount-record.authorDynamicMaskHitOnDtOrbSet;
+    // This mirrors the public SIn ORB-extractor safety rule only as a
+    // counterfactual statistic over DT-SLAM's unfiltered keypoints.
+    record.counterfactualFallbackOnDtOrbSet = record.wouldKeepOrbCount<250;
+    record.counterfactualRemovedOnDtOrbSet =
+        record.counterfactualFallbackOnDtOrbSet ?
+        0 : record.authorDynamicMaskHitOnDtOrbSet;
+    record.trackingStateAfter = -1;
+    mvSInStyleShadowDiagnostics.push_back(record);
+    ++mnSInStyleComputedFrames;
+    ++mnSInStyleInputFrameIndex;
+
+    if(mnSInStyleLogEveryN>0 &&
+       (mCurrentFrame.mnId%
+        static_cast<long unsigned int>(mnSInStyleLogEveryN)==0))
+    {
+        cout << "[SIn S1] input_index=" << record.inputFrameIndex
+             << " frame=" << record.frameId
+             << " reference=" << record.stats.referenceAvailable
+             << " dynamic_px=" << record.stats.dynamicPixels
+             << " unknown_px=" << record.stats.unknownPixels
+             << " raw_orb=" << record.rawOrbCount
+             << " mask_hit_dt_orb="
+             << record.authorDynamicMaskHitOnDtOrbSet
+             << " counterfactual_fallback="
+             << record.counterfactualFallbackOnDtOrbSet
+             << " native_regions="
+             << record.nativeInitialStats.producedClusters
+             << " native_orb_assigned="
+             << record.nativeInitialOrbAssignedCount
+             << " gradient_edges="
+             << record.nativeGradientStats.rawGradientEdgePixels
+             << " split_regions="
+             << record.nativeGradientStats.splitComponentCount
+             << " plane_count="
+             << record.nativePlaneStats.planeCount
+             << " retained_plane_edges="
+             << record.nativePlaneStats.retainedPlaneBoundaryPixels
+             << " combined_regions="
+             << record.nativePlaneStats.combinedComponentCount
+             << " rag_regions="
+             << record.nativeRAGStats.outputRegionCount
+             << " rag_merges="
+             << record.nativeRAGStats.highMiddleMergeCount+
+                    record.nativeRAGStats.lowScoreMergeCount
+             << " dense_flow_available="
+             << record.denseFlowStats.available
+             << " dense_flow_low_px="
+             << record.denseFlowStats.lowPixels
+             << " dense_flow_high_px="
+             << record.denseFlowStats.highPixels
+             << " region_dynamic_available="
+             << record.regionDynamicStats.available
+             << " region_dynamic_px="
+             << record.regionDynamicStats.depthSupportedDynamicPixels
+             << " region_dynamic_orb="
+             << record.regionDynamicOrbCount
+             << " region_filter_state="
+             << record.regionFeatureFilterState
+             << " region_filter_new_dynamic="
+             << record.regionFeatureFilterNewDynamicFeatures
+             << " actual_removed_so_far="
+             << record.regionFeatureFilterActualRemovedAssociations
+             << " total_ms=" << record.runtime.totalMs << endl;
+    }
+}
+
 int Tracking::RemoveDynamicAssociations(Frame &frame)
 {
     int removed = 0;
@@ -3868,11 +5856,102 @@ int Tracking::RemoveDynamicAssociations(Frame &frame)
     {
         if(frame.mvbDynamic[i] && frame.mvpMapPoints[i])
         {
+            if(mbSInStyleRegionFeatureFilterEnabled &&
+               i<mvbCurrentSInRegionDynamicFeatures.size() &&
+               mvbCurrentSInRegionDynamicFeatures[i]!=0 &&
+               i<mvbCurrentSInRegionRemovedAssociations.size() &&
+               mvbCurrentSInRegionRemovedAssociations[i]==0)
+            {
+                mvbCurrentSInRegionRemovedAssociations[i] = 1;
+                if(!mvSInStyleShadowDiagnostics.empty() &&
+                   mvSInStyleShadowDiagnostics.back().frameId==frame.mnId)
+                {
+                    ++mvSInStyleShadowDiagnostics.back().
+                        regionFeatureFilterActualRemovedAssociations;
+                }
+            }
             frame.mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
             removed++;
         }
     }
     return removed;
+}
+
+bool Tracking::FailOpenSInRegionFeatureFilterForTracking(
+    const std::string &stage)
+{
+    if(!mbSInStyleRegionFeatureFilterEnabled ||
+       mbCurrentSInRegionTrackingFailOpen ||
+       mvbCurrentSInRegionNewDynamicFeatures.size()!=
+           static_cast<std::size_t>(mCurrentFrame.N) ||
+       mCurrentFrame.mvbDynamic.size()!=
+           static_cast<std::size_t>(mCurrentFrame.N))
+    {
+        return false;
+    }
+
+    std::size_t cleared = 0;
+    for(int index=0; index<mCurrentFrame.N; ++index)
+    {
+        if(mvbCurrentSInRegionNewDynamicFeatures[
+               static_cast<std::size_t>(index)]==0)
+        {
+            continue;
+        }
+        if(mCurrentFrame.mvbDynamic[index]!=0)
+        {
+            mCurrentFrame.mvbDynamic[index] = 0;
+            ++cleared;
+        }
+    }
+    if(cleared==0)
+        return false;
+
+    mbCurrentSInRegionTrackingFailOpen = true;
+    if(!mvSInStyleShadowDiagnostics.empty() &&
+       mvSInStyleShadowDiagnostics.back().frameId==mCurrentFrame.mnId)
+    {
+        SInStyleShadowRecord &record =
+            mvSInStyleShadowDiagnostics.back();
+        record.regionFeatureFilterTrackingFailOpen = true;
+        record.regionFeatureFilterTrackingFailOpenStage = stage;
+        record.regionFeatureFilterTrackingFailOpenClearedFeatures =
+            cleared;
+    }
+
+    cout << "[SIn S2] frame=" << mCurrentFrame.mnId
+         << " tracking_fail_open_stage=" << stage
+         << " cleared_geometry_flags=" << cleared
+         << " semantic_flags_preserved=true"
+         << " pose_reoptimization=none" << endl;
+    return true;
+}
+
+void Tracking::RestoreSInRegionFeatureFilterForMapping()
+{
+    if(!mbCurrentSInRegionTrackingFailOpen ||
+       mvbCurrentSInRegionNewDynamicFeatures.size()!=
+           static_cast<std::size_t>(mCurrentFrame.N) ||
+       mCurrentFrame.mvbDynamic.size()!=
+           static_cast<std::size_t>(mCurrentFrame.N))
+    {
+        return;
+    }
+
+    for(int index=0; index<mCurrentFrame.N; ++index)
+    {
+        if(mvbCurrentSInRegionNewDynamicFeatures[
+               static_cast<std::size_t>(index)]!=0)
+        {
+            mCurrentFrame.mvbDynamic[index] = 1;
+        }
+    }
+    if(!mvSInStyleShadowDiagnostics.empty() &&
+       mvSInStyleShadowDiagnostics.back().frameId==mCurrentFrame.mnId)
+    {
+        mvSInStyleShadowDiagnostics.back().
+            regionFeatureFilterMappingFlagsRestored = true;
+    }
 }
 
 void Tracking::RunSparseEgoFlowShadow()
@@ -6316,6 +8395,15 @@ void Tracking::Track()
         // System is initialized. Track Frame.
         bool bOK;
 
+        // Relocalization must remain fail-open with respect to the optional
+        // SIn-style geometry filter. Semantic flags are preserved, and the
+        // geometry flags are restored after tracking for mapping admission.
+        if(mState==LOST)
+        {
+            FailOpenSInRegionFeatureFilterForTracking(
+                "relocalization");
+        }
+
         // Initial camera pose estimation using motion model or relocalization (if tracking is lost)
         if(!mbOnlyTracking)
         {
@@ -6444,6 +8532,11 @@ void Tracking::Track()
             if(bOK && !mbVO)
                 bOK = TrackLocalMap();
         }
+
+        // A tracking fail-open must not turn into a mapping fail-open. Restore
+        // exactly the SIn geometry flags introduced for this frame before any
+        // new KeyFrame/MapPoint admission is considered below.
+        RestoreSInRegionFeatureFilterForMapping();
 
         if(bOK)
             mState = OK;
@@ -6893,7 +8986,17 @@ bool Tracking::TrackReferenceKeyFrame()
     ORBmatcher matcher(0.7,true);
     vector<MapPoint*> vpMapPointMatches;
 
-    int nmatches = matcher.SearchByBoW(mpReferenceKF,mCurrentFrame,vpMapPointMatches);
+    int nmatches = matcher.SearchByBoW(
+        mpReferenceKF,mCurrentFrame,vpMapPointMatches);
+
+    if(nmatches<15 &&
+       FailOpenSInRegionFeatureFilterForTracking(
+           "reference_keyframe_pre_pose"))
+    {
+        vpMapPointMatches.clear();
+        nmatches = matcher.SearchByBoW(
+            mpReferenceKF,mCurrentFrame,vpMapPointMatches);
+    }
 
     if(nmatches<15)
         return false;
@@ -7025,6 +9128,18 @@ bool Tracking::TrackWithMotionModel()
         nmatches = matcher.SearchByProjection(mCurrentFrame,mLastFrame,2*th,mSensor==System::MONOCULAR);
     }
 
+    if(nmatches<20 &&
+       FailOpenSInRegionFeatureFilterForTracking(
+           "motion_model_pre_pose"))
+    {
+        fill(mCurrentFrame.mvpMapPoints.begin(),
+             mCurrentFrame.mvpMapPoints.end(),
+             static_cast<MapPoint*>(NULL));
+        nmatches = matcher.SearchByProjection(
+            mCurrentFrame,mLastFrame,2*th,
+            mSensor==System::MONOCULAR);
+    }
+
     if(nmatches<20)
         return false;
 
@@ -7076,6 +9191,26 @@ bool Tracking::TrackLocalMap()
     SearchLocalPoints();
 
     RemoveDynamicAssociations(mCurrentFrame);
+
+    const int requiredPotentialInliers =
+        mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames ? 50 : 30;
+    int potentialMapInliers = 0;
+    for(int index=0; index<mCurrentFrame.N; ++index)
+    {
+        MapPoint *mapPoint = mCurrentFrame.mvpMapPoints[index];
+        if(!mapPoint || mapPoint->isBad())
+            continue;
+        if(mbOnlyTracking || mapPoint->Observations()>0)
+            ++potentialMapInliers;
+    }
+    if(potentialMapInliers<requiredPotentialInliers &&
+       FailOpenSInRegionFeatureFilterForTracking(
+           "local_map_pre_pose"))
+    {
+        SearchLocalPoints();
+        RemoveDynamicAssociations(mCurrentFrame);
+    }
+
     ApplySparseFlowTrackingFilter();
     RecordSparseFlowAssociationSnapshot(
         "post_search_pre_pose");
@@ -8097,6 +10232,19 @@ void Tracking::Reset()
     KeyFrame::nNextId = 0;
     Frame::nNextId = 0;
     mState = NO_IMAGES_YET;
+    mSInStyleDetector.Reset();
+    mSInStyleInitialRegionClusterer.Reset();
+    mSInStyleDenseFlowResidualEstimator.Reset();
+    mSInStyleRegionDynamicClassifier.Reset();
+    mvbCurrentSInRegionDynamicFeatures.clear();
+    mvbCurrentSInRegionNewDynamicFeatures.clear();
+    mvbCurrentSInRegionRemovedAssociations.clear();
+    mbCurrentSInRegionTrackingFailOpen = false;
+    mCurrentSInGeometryDynamicMask.release();
+    mbCurrentSInGeometryEvidenceAvailable = false;
+    mCurrentSInDepthFilterResult = SInStyleDepthFilterResult();
+    mbCurrentSInDepthMappingAdmissible = false;
+    ++mnSInStyleResetEpoch;
     mGeometricDetector.ResetReference();
     mGeometricGroundTruthDetector.ResetReference();
     mCurrentDepthMeters.release();

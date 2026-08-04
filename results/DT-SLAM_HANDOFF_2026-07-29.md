@@ -1,10 +1,62 @@
 # DT-SLAM 项目交接说明
 
-更新时间：2026-07-31
+更新时间：2026-08-04
 工作区：`/home/zhu/dynaslam_ws`
 源代码：`/home/zhu/dynaslam_ws/DT-SLAM`
 
 > 本文是新 Codex 会话的单一交接入口，不替代代码、实验日志和阶段报告。若本文与本地代码或原始日志冲突，以本地可核查证据为准，并先记录差异，不得凭记忆猜测。
+
+## 0. 2026-08-04 当前权威状态
+
+本文第 1--35 节保留历史路线和负实验，不能把其中旧 commit 或“下一步”覆盖当前状态。
+当前工作区 HEAD 为 `220fed6`，SIn 风格 S1/S2/S3 改动仍未提交；本地工作区继续作为
+权威版本。
+
+当前主线：
+
+| 阶段 | 状态 |
+| --- | --- |
+| S0：独立 SInDSLAM CPU/GPU、源码和协议审计 | 已完成 |
+| S1：native CPU DeepFlow＋区域判决 shadow | 已完成受控 parity 和 TUM/Bonn 行为审计；gradient-only RAG 不等价 PEAC |
+| S2：region mask → ORB feature filter | 已完成限定验收、默认关闭；最小原生条件 fail-open 消除已观察到的 obstructing 长段 LOST |
+| S3：映射侧动态深度过滤 | 工程接口、合成测试、Bonn 动态/静态首轮和同位姿点云已完成；默认关闭，地图质量未放行 |
+| S4：长间隔精修 | 未开始；只有成对点云确认慢速/间歇运动残影后才考虑 |
+
+最重要的新证据：
+
+- Bonn `moving_nonobstructing_box` 778 帧三轮：S2 OFF/ON ATE RMSE 中位
+  `0.514344/0.022526 m`，RPE RMSE 中位 `0.022127/0.014381 m`；ON 三轮均完整；
+- Bonn `moving_obstructing_box` 589 帧最小安全收尾：只在 frame 296 的 ORB-SLAM2
+  motion-model pre-pose `<20 matches` 条件触发一次 fail-open，589/589 Tracking OK；
+  ATE/RPE=`0.245857/0.016536 m`，同协议 OFF 为 `0.546996/0.019121 m`；
+- fail-open 只撤销本帧 SIn geometry tracking flags，semantic 保留；Tracking 结束后恢复
+  同一 flags 继续否决新 MapPoint。没有新 detector 阈值或额外 PoseOptimization；
+- nonobstructing 复核 ATE/RPE=`0.024146/0.014319 m`、fail-open 0 次；Bonn
+  `static_close_far` 前 300 associations 无 LOST、无 fail-open；
+- S3 不改 Tracking：移动非遮挡箱子 778/778 成功，ATE/RPE=`0.019436/0.014075 m`；
+  静态近远景前 298 帧 ATE/RPE=`0.021876/0.018684 m`。这些轨迹差异不能归功于 S3；
+- S3 过滤器中位耗时约动态/静态 `0.373/0.307 ms`。有效深度总否决比例约
+  `9.04%/6.84%`，但静态个别帧有大面积删除，因此只证明接口成立，未证明地图质量；
+- 已生成同位姿过滤前/后 PLY，下一步只做箱子残影和静态空洞检查，不增加 S2 阈值或
+  安全补丁。
+- 5 cm 时间支持代理：动态箱子序列中单帧/至少八帧支持体素的完全删除比例为
+  `33.00%/0.20%`，静态序列为 `5.65%/0%`。这是优先清理短暂残影的正面趋势，
+  但不是箱子真值，仍需查看成对 PLY 的空间位置。
+- 用户已并排查看动态 PCD：未过滤点云有多个重合人影，S3 后约剩两道人影，动态残影
+  明显减少。该结果支持 S3 对当前序列的建图价值；残留说明仍有漏检，静态成对点云
+  还需最终目视确认。
+
+当前详细报告：
+
+- `results/sindslam_s1_shadow_2026-08-03/S1_NATIVE_CPU_REGION_DECISION_SHADOW_RESULT.md`
+- `results/sindslam_s2_2026-08-04/S2_REGION_FEATURE_FILTER_SPEC.md`
+- `results/sindslam_s2_2026-08-04/S2_REGION_FEATURE_FILTER_RESULT.md`
+- `results/sindslam_s3_2026-08-04/S3_DYNAMIC_DEPTH_FILTER_SPEC.md`
+- `results/sindslam_s3_2026-08-04/S3_DYNAMIC_DEPTH_FILTER_RESULT.md`
+
+当前 SIn 改动仍遵守：默认关闭、不新增第三次 `PoseOptimization()`、不修改
+`Optimizer.cc`/g2o/YOLO/LoopClosing/LocalMapping 算法。作者 PEAC 文件为
+`AGPL-3.0-or-later`，未直接复制进 DT-SLAM。
 
 ---
 

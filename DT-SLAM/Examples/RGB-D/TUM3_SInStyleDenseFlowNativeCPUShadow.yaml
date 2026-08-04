@@ -1,0 +1,60 @@
+%YAML:1.0
+
+# TUM fr3 S1 native CPU DeepFlow evidence shadow. The author region state is
+# still replayed for paired audit; native dense-flow evidence never mutates
+# Frame, mvpMapPoints, mvbDynamic, Optimizer, or MapPoint creation.
+Camera.fx: 535.4
+Camera.fy: 539.2
+Camera.cx: 320.1
+Camera.cy: 247.6
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 0
+Geometry.LogEveryN: 30
+Geometry.ResidualThresholdM: 0.10
+Geometry.RegionGrowEnable: 0
+Geometry.RegionDepthThresholdM: 0.05
+Geometry.DebugSave: 0
+Geometry.DebugEveryN: 30
+
+# Override the author region directory and CSV path at runtime. The CPU
+# backend maintains only two grayscale history frames and exposes continuous
+# low/high residual evidence; it does not produce a dynamic decision.
+SInStyle.ShadowEnable: 1
+SInStyle.Backend: "reference_replay"
+SInStyle.ReferenceBackend: "brox_cuda"
+SInStyle.ReferenceDirectory: "."
+SInStyle.ReferenceMaskSuffix: "_mask_final.png"
+SInStyle.RequireLabels: 1
+SInStyle.LogEveryN: 10
+SInStyle.CsvPath: ""
+SInStyle.DenseFlowResidualEnable: 1
+SInStyle.DenseFlowResidualBackend: "deepflow_cpu"
+SInStyle.DenseFlowResidualRequireReference: 0
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500
