@@ -41,6 +41,11 @@ def parse_args():
     parser.add_argument("--model", type=existing_path)
     parser.add_argument("--output-directory", required=True, type=Path)
     parser.add_argument("--depth-mask-output-directory", type=Path)
+    parser.add_argument(
+        "--r1-audit-output-directory",
+        type=Path,
+        help="optional fresh directory for read-only R1 intermediate outputs",
+    )
     parser.add_argument("--viewer", choices=("on", "off"), default="off")
     return parser.parse_args()
 
@@ -73,7 +78,8 @@ def clear_sin_outputs(environment):
             "DT_SLAM_SIN_NATIVE_PLANE_DIR",
             "DT_SLAM_SIN_NATIVE_RAG_DIR",
             "DT_SLAM_SIN_DENSE_FLOW_REFERENCE_DIR",
-            "DT_SLAM_SIN_DEPTH_FILTER_OUTPUT_DIR"):
+            "DT_SLAM_SIN_DEPTH_FILTER_OUTPUT_DIR",
+            "DT_SLAM_SIN_R1_AUDIT_DIR"):
         environment.pop(name, None)
 
 
@@ -83,6 +89,8 @@ def main():
     geometry_enabled = args.mode in ("geometry_only", "semantic_geometry")
     if semantic_enabled and args.model is None:
         raise SystemExit("{} requires --model".format(args.mode))
+    if args.r1_audit_output_directory is not None and not geometry_enabled:
+        raise SystemExit("R1 audit output requires a geometry-enabled mode")
 
     output_directory = args.output_directory.expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -144,6 +152,22 @@ def main():
     else:
         environment.pop("DT_SLAM_SIN_SHADOW_FRAME_CSV", None)
 
+    if args.r1_audit_output_directory is not None:
+        r1_audit_output_directory = (
+            args.r1_audit_output_directory.expanduser().resolve())
+        if r1_audit_output_directory.exists() and any(
+                r1_audit_output_directory.iterdir()):
+            raise SystemExit(
+                "R1 audit output directory is not empty: {}".format(
+                    r1_audit_output_directory))
+        for child in ("flow", "residual", "labels", "classifier"):
+            (r1_audit_output_directory / child).mkdir(
+                parents=True, exist_ok=True)
+        environment["DT_SLAM_SIN_R1_AUDIT_DIR"] = str(
+            r1_audit_output_directory)
+    else:
+        r1_audit_output_directory = None
+
     manifest = {
         "mode": args.mode,
         "semantic_enabled": semantic_enabled,
@@ -153,6 +177,9 @@ def main():
         "depth_mask_output_directory": (
             str(depth_mask_output_directory)
             if depth_mask_output_directory is not None else None),
+        "r1_audit_output_directory": (
+            str(r1_audit_output_directory)
+            if r1_audit_output_directory is not None else None),
         "viewer": args.viewer,
         "working_directory": str(args.working_directory),
         "settings": str(settings),

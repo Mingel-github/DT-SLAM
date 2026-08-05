@@ -308,6 +308,8 @@ protected:
     std::string mSInStyleNativePlaneOutputDir;
     std::string mSInStyleNativeRAGOutputDir;
     std::string mSInStyleRegionDynamicOutputDir;
+    // Optional R1 serialization root. Empty during all normal runs.
+    std::string mSInStyleR1AuditDir;
     std::string mSInStyleDepthFilterMaskMode;
     std::string mSInStyleDepthFilterCsvPath;
     std::string mSInStyleDepthFilterOutputDir;

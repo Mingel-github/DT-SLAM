@@ -75,6 +75,234 @@ std::string JoinDiagnosticValues(const std::vector<T> &values)
     return stream.str();
 }
 
+std::string SInR1FrameStem(const std::string &root,
+                           const std::string &subdirectory,
+                           const std::size_t frameIndex)
+{
+    std::ostringstream path;
+    path << root;
+    if(!root.empty() && root[root.size()-1]!='/')
+        path << "/";
+    path << subdirectory << "/frame_" << std::setfill('0')
+         << std::setw(6) << frameIndex;
+    return path.str();
+}
+
+bool WriteSInR1Flow(const std::string &path, const cv::Mat &flow)
+{
+    if(flow.empty() || flow.type()!=CV_32FC2)
+        return false;
+    std::ofstream stream(path.c_str(),std::ios::binary);
+    if(!stream.is_open())
+        return false;
+    const float magic = 202021.25f;
+    const int width = flow.cols;
+    const int height = flow.rows;
+    stream.write(reinterpret_cast<const char*>(&magic),sizeof(magic));
+    stream.write(reinterpret_cast<const char*>(&width),sizeof(width));
+    stream.write(reinterpret_cast<const char*>(&height),sizeof(height));
+    for(int row=0; row<flow.rows; ++row)
+    {
+        stream.write(reinterpret_cast<const char*>(flow.ptr<cv::Vec2f>(row)),
+                     static_cast<std::streamsize>(
+                         flow.cols*sizeof(cv::Vec2f)));
+    }
+    return stream.good();
+}
+
+cv::Mat EncodeSInR1Labels(const cv::Mat &labels)
+{
+    if(labels.empty() || labels.type()!=CV_32SC1)
+        return cv::Mat();
+    cv::Mat encoded(labels.size(),CV_16UC1,cv::Scalar(0));
+    for(int row=0; row<labels.rows; ++row)
+    {
+        const int *source = labels.ptr<int>(row);
+        unsigned short *destination = encoded.ptr<unsigned short>(row);
+        for(int col=0; col<labels.cols; ++col)
+        {
+            if(source[col]>=0 && source[col]<
+               static_cast<int>(std::numeric_limits<unsigned short>::max()))
+            {
+                destination[col] = static_cast<unsigned short>(source[col]+1);
+            }
+        }
+    }
+    return encoded;
+}
+
+bool SInR1FileExists(const std::string &path)
+{
+    std::ifstream stream(path.c_str());
+    return stream.good();
+}
+
+void AppendSInR1FrameCsv(
+    const std::string &root,
+    const std::size_t inputIndex,
+    const long unsigned int frameId,
+    const double timestamp,
+    const SInStyleDenseFlowResidualResult &flow,
+    const SInStyleInitialRegionResult &initial,
+    const SInStyleGradientSplitResult &gradient,
+    const SInStyleRAGMergeResult &rag,
+    const SInStyleRegionDynamicResult &classifier)
+{
+    const std::string path = root+"/r1_frame_index.csv";
+    const bool writeHeader = !SInR1FileExists(path);
+    std::ofstream stream(path.c_str(),std::ios::app);
+    if(!stream.is_open())
+        throw std::runtime_error("cannot open R1 frame index: "+path);
+    if(writeHeader)
+    {
+        stream << "input_index,frame,timestamp,flow_available,"
+               << "reference_index,reference_lag,homography_available,"
+               << "h00,h01,h02,h10,h11,h12,h20,h21,h22,"
+               << "max_flow_px,max_residual_px,low_threshold_px,"
+               << "high_threshold_px,low_pixels,high_pixels,"
+               << "initial_available,gradient_available,rag_available,"
+               << "classifier_available,temporal_prior_used,"
+               << "temporal_added_pixels,final_dynamic_pixels\n";
+    }
+    stream << std::setprecision(15)
+           << inputIndex << "," << frameId << "," << timestamp << ","
+           << static_cast<int>(flow.stats.available) << ","
+           << flow.stats.referenceIndex << ","
+           << flow.stats.actualReferenceLag << ","
+           << static_cast<int>(!flow.homographyCurrentToReference.empty());
+    for(int row=0; row<3; ++row)
+    {
+        for(int col=0; col<3; ++col)
+        {
+            stream << ",";
+            if(!flow.homographyCurrentToReference.empty())
+                stream << flow.homographyCurrentToReference.at<double>(row,col);
+        }
+    }
+    stream << "," << flow.stats.maxObservedFlowPx
+           << "," << flow.stats.maxResidualPx
+           << "," << flow.stats.lowThresholdPx
+           << "," << flow.stats.highThresholdPx
+           << "," << flow.stats.lowPixels
+           << "," << flow.stats.highPixels
+           << "," << static_cast<int>(initial.stats.available)
+           << "," << static_cast<int>(gradient.stats.available)
+           << "," << static_cast<int>(rag.stats.available)
+           << "," << static_cast<int>(classifier.stats.available)
+           << "," << static_cast<int>(flow.stats.temporalRegionPriorUsed)
+           << "," << classifier.stats.temporalHighPixelsAdded
+           << "," << classifier.stats.depthSupportedDynamicPixels
+           << "\n";
+}
+
+void AppendSInR1RegionCsv(
+    const std::string &root,
+    const std::size_t inputIndex,
+    const long unsigned int frameId,
+    const double timestamp,
+    const SInStyleRegionDynamicResult &classifier)
+{
+    const std::string path = root+"/r1_region_decisions.csv";
+    const bool writeHeader = !SInR1FileExists(path);
+    std::ofstream stream(path.c_str(),std::ios::app);
+    if(!stream.is_open())
+        throw std::runtime_error("cannot open R1 region audit: "+path);
+    if(writeHeader)
+    {
+        stream << "input_index,frame,timestamp,region_label,region_pixels,"
+               << "current_high_pixels,passed_minimum_high_pixels,"
+               << "high_contours,eligible_contours,valid_seed_contours,"
+               << "filled_pixels,filled_fraction,output_state,"
+               << "decision_reason\n";
+    }
+    stream << std::setprecision(15);
+    for(std::size_t index=0;
+        index<classifier.regionDecisionAudits.size(); ++index)
+    {
+        const SInStyleRegionDecisionAudit &audit =
+            classifier.regionDecisionAudits[index];
+        stream << inputIndex << "," << frameId << "," << timestamp << ","
+               << audit.regionLabel << "," << audit.regionPixels << ","
+               << audit.currentHighPixels << ","
+               << static_cast<int>(audit.passedMinimumHighPixels) << ","
+               << audit.highContourCount << ","
+               << audit.eligibleContourCount << ","
+               << audit.validSeedContourCount << ","
+               << audit.filledPixels << "," << audit.filledFraction << ","
+               << audit.outputState << "," << audit.decisionReason << "\n";
+    }
+}
+
+void WriteSInR1FrameAudit(
+    const std::string &root,
+    const std::size_t inputIndex,
+    const long unsigned int frameId,
+    const double timestamp,
+    const SInStyleDenseFlowResidualResult &flow,
+    const SInStyleInitialRegionResult &initial,
+    const SInStyleGradientSplitResult &gradient,
+    const SInStyleRAGMergeResult &rag,
+    const SInStyleRegionDynamicResult &classifier)
+{
+    AppendSInR1FrameCsv(root,inputIndex,frameId,timestamp,
+                        flow,initial,gradient,rag,classifier);
+    AppendSInR1RegionCsv(root,inputIndex,frameId,timestamp,classifier);
+
+    const std::string flowStem = SInR1FrameStem(root,"flow",inputIndex);
+    if(flow.stats.available)
+    {
+        if(!WriteSInR1Flow(flowStem+"_observed.flo",flow.observedFlowFull))
+            throw std::runtime_error("failed to write R1 observed flow");
+        cv::Mat residualQ64;
+        flow.residualMagnitudePx.convertTo(residualQ64,CV_16UC1,64.0);
+        cv::imwrite(SInR1FrameStem(root,"residual",inputIndex)+
+                    "_magnitude_q64.png",residualQ64);
+        cv::imwrite(SInR1FrameStem(root,"residual",inputIndex)+
+                    "_normalized.png",flow.normalizedResidual);
+        cv::imwrite(SInR1FrameStem(root,"residual",inputIndex)+
+                    "_above_low.png",flow.lowResidualMask);
+        cv::imwrite(SInR1FrameStem(root,"residual",inputIndex)+
+                    "_high.png",flow.highResidualMask);
+    }
+
+    const cv::Mat initialLabels = EncodeSInR1Labels(initial.labels);
+    const cv::Mat gradientLabels = EncodeSInR1Labels(gradient.splitCoreLabels);
+    const cv::Mat ragLabels = EncodeSInR1Labels(rag.mergedLabels);
+    if(!initialLabels.empty())
+        cv::imwrite(SInR1FrameStem(root,"labels",inputIndex)+
+                    "_initial_plus1.png",initialLabels);
+    if(!gradientLabels.empty())
+        cv::imwrite(SInR1FrameStem(root,"labels",inputIndex)+
+                    "_gradient_plus1.png",gradientLabels);
+    if(!ragLabels.empty())
+        cv::imwrite(SInR1FrameStem(root,"labels",inputIndex)+
+                    "_rag_plus1.png",ragLabels);
+
+    if(classifier.stats.available)
+    {
+        const std::string classifierStem =
+            SInR1FrameStem(root,"classifier",inputIndex);
+        cv::imwrite(classifierStem+"_current_above_low.png",
+                    classifier.currentAboveLowMask);
+        cv::imwrite(classifierStem+"_current_high.png",
+                    classifier.currentHighResidualMask);
+        cv::imwrite(classifierStem+"_previous_high.png",
+                    classifier.previousHighResidualMask);
+        cv::imwrite(classifierStem+"_temporal_added.png",
+                    classifier.temporalHighAddedMask);
+        cv::imwrite(classifierStem+"_support_before_dilate.png",
+                    classifier.aboveLowSupportBeforeDilation);
+        cv::imwrite(classifierStem+"_support_after_dilate.png",
+                    classifier.lowResidualSupportMask);
+        cv::imwrite(classifierStem+"_core.png",
+                    classifier.filledDynamicMaskBeforeDilation);
+        cv::imwrite(classifierStem+"_dynamic.png",
+                    classifier.dynamicMask);
+        cv::imwrite(classifierStem+"_state.png",
+                    classifier.rawStateMask);
+    }
+}
+
 std::set<long unsigned int> ParseFrameIdFilter(const char *value)
 {
     std::set<long unsigned int> frameIds;
@@ -571,6 +799,13 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     {
         mSInStyleRegionDynamicOutputDir =
             sinStyleRegionDynamicOutputDirOverride;
+    }
+    const char *sinStyleR1AuditDirOverride =
+        std::getenv("DT_SLAM_SIN_R1_AUDIT_DIR");
+    if(sinStyleR1AuditDirOverride &&
+       sinStyleR1AuditDirOverride[0]!='\0')
+    {
+        mSInStyleR1AuditDir = sinStyleR1AuditDirOverride;
     }
     sinStyleConfig.requireRegionValidity =
         mbSInStyleRegionDynamicEnabled &&
@@ -1182,6 +1417,9 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
              << "[SIn S1] region dynamic output directory: "
              << (mSInStyleRegionDynamicOutputDir.empty() ?
                     "disabled" : mSInStyleRegionDynamicOutputDir) << endl
+             << "[SIn R1] read-only audit directory: "
+             << (mSInStyleR1AuditDir.empty() ?
+                    "disabled" : mSInStyleR1AuditDir) << endl
              << "[SIn S1] dynamic_decision=shadow_only, "
              << "direct_slam_state_mutation=none" << endl;
     }
@@ -5324,7 +5562,8 @@ void Tracking::RunSInStyleRegionShadow(
             mnSInStyleInputFrameIndex,regionDecisionLabels,
             regionDecisionValidity,
             denseFlowResult.lowResidualMask,
-            denseFlowResult.highResidualMask);
+            denseFlowResult.highResidualMask,
+            !mSInStyleR1AuditDir.empty());
     if(regionDynamicResult.stats.available &&
        regionDynamicResult.stats.dynamicStateAvailable &&
        !regionDynamicResult.dynamicMask.empty())
@@ -5339,6 +5578,23 @@ void Tracking::RunSInStyleRegionShadow(
             mnSInStyleInputFrameIndex,
             regionDynamicResult.rawStateMask,
             regionDecisionLabels);
+    }
+    if(!mSInStyleR1AuditDir.empty())
+    {
+        try
+        {
+            WriteSInR1FrameAudit(
+                mSInStyleR1AuditDir,mnSInStyleInputFrameIndex,
+                mCurrentFrame.mnId,mCurrentFrame.mTimeStamp,
+                denseFlowResult,nativeInitialResult,nativeGradientResult,
+                nativeRAGResult,regionDynamicResult);
+        }
+        catch(const std::exception &error)
+        {
+            // Diagnostics must never change detector or SLAM behavior.
+            cerr << "[SIn R1] read-only audit write failed: "
+                 << error.what() << endl;
+        }
     }
 
     SInStyleShadowRecord record;

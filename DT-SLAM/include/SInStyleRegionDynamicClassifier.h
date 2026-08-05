@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include <opencv2/core/core.hpp>
 
@@ -58,6 +59,23 @@ struct SInStyleRegionDynamicStats
     double totalMs = 0.0;
 };
 
+// Read-only explanation of the existing classifier branch taken for one
+// region.  These fields must never be consumed by the classifier itself.
+struct SInStyleRegionDecisionAudit
+{
+    int regionLabel = 0;
+    int regionPixels = 0;
+    int currentHighPixels = 0;
+    bool passedMinimumHighPixels = false;
+    int highContourCount = 0;
+    int eligibleContourCount = 0;
+    int validSeedContourCount = 0;
+    int filledPixels = 0;
+    double filledFraction = 0.0;
+    std::string outputState = "none";
+    std::string decisionReason = "not_evaluated";
+};
+
 struct SInStyleRegionDynamicResult
 {
     // Author-compatible raw state: 0 unknown, 125 static, 255 dynamic.
@@ -69,8 +87,16 @@ struct SInStyleRegionDynamicResult
     // region-valid domain. Consumers must use dynamicMask for valid evidence.
     cv::Mat authorStyleDynamicMask;
     cv::Mat dynamicMask;
+    // R1 audit matrices. They are snapshots of evidence already used by the
+    // existing decision and do not feed back into classification.
+    cv::Mat currentAboveLowMask;
+    cv::Mat currentHighResidualMask;
+    cv::Mat previousHighResidualMask;
+    cv::Mat temporalHighAddedMask;
+    cv::Mat aboveLowSupportBeforeDilation;
     cv::Mat lowResidualSupportMask;
     cv::Mat filledDynamicMaskBeforeDilation;
+    std::vector<SInStyleRegionDecisionAudit> regionDecisionAudits;
     SInStyleRegionDynamicStats stats;
 };
 
@@ -85,7 +111,8 @@ public:
         const cv::Mat &regionLabels,
         const cv::Mat &regionValidMask,
         const cv::Mat &lowResidualMask,
-        const cv::Mat &highResidualMask);
+        const cv::Mat &highResidualMask,
+        bool collectAudit = false);
 
 private:
     SInStyleRegionDynamicConfig mConfig;

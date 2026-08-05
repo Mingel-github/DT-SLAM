@@ -75,7 +75,8 @@ SInStyleRegionDynamicClassifier::Compute(
     const cv::Mat &regionLabels,
     const cv::Mat &regionValidMask,
     const cv::Mat &lowResidualMask,
-    const cv::Mat &highResidualMask)
+    const cv::Mat &highResidualMask,
+    const bool collectAudit)
 {
     SInStyleRegionDynamicResult result;
     result.stats.enabled = mConfig.enabled;
@@ -109,6 +110,15 @@ SInStyleRegionDynamicClassifier::Compute(
     cv::Mat highEvidence = BinaryMask(highResidualMask);
     cv::bitwise_and(BinaryMask(lowResidualMask),result.validRegionMask,
                     lowKnown);
+    if(collectAudit)
+    {
+        result.currentAboveLowMask = lowKnown.clone();
+        result.currentHighResidualMask = highEvidence.clone();
+        result.previousHighResidualMask = cv::Mat(
+            regionLabels.size(),CV_8UC1,cv::Scalar(0));
+        result.temporalHighAddedMask = cv::Mat(
+            regionLabels.size(),CV_8UC1,cv::Scalar(0));
+    }
     result.lowResidualSupportMask = lowKnown.clone();
     if(mConfig.usePreviousHighResidual && mbPreviousHighResidualValid &&
        mPreviousHighResidualMask.size()==regionLabels.size())
@@ -116,13 +126,22 @@ SInStyleRegionDynamicClassifier::Compute(
         cv::Mat previousKnown;
         cv::bitwise_and(mPreviousHighResidualMask,result.validRegionMask,
                         previousKnown);
+        if(collectAudit)
+            result.previousHighResidualMask = previousKnown.clone();
         cv::Mat newlyAdded;
         cv::bitwise_and(previousKnown,result.lowResidualSupportMask==0,
                         newlyAdded);
+        if(collectAudit)
+            result.temporalHighAddedMask = newlyAdded.clone();
         result.stats.temporalHighPixelsAdded =
             static_cast<std::size_t>(cv::countNonZero(newlyAdded));
         cv::bitwise_or(result.lowResidualSupportMask,previousKnown,
                        result.lowResidualSupportMask);
+    }
+    if(collectAudit)
+    {
+        result.aboveLowSupportBeforeDilation =
+            result.lowResidualSupportMask.clone();
     }
     const cv::Mat lowElement = cv::getStructuringElement(
         cv::MORPH_ELLIPSE,
@@ -158,24 +177,38 @@ SInStyleRegionDynamicClassifier::Compute(
     result.stats.regionCount = static_cast<int>(labels.size());
     for(const int label : labels)
     {
+        SInStyleRegionDecisionAudit audit;
+        audit.regionLabel = label;
         cv::Mat regionMask;
         cv::compare(regionLabels,label,regionMask,cv::CMP_EQ);
         const int regionPixels = cv::countNonZero(regionMask);
+        audit.regionPixels = regionPixels;
         if(regionPixels<=0)
-            continue;
-        cv::Mat regionHigh;
-        cv::bitwise_and(regionMask,highEvidence,regionHigh);
-        if(cv::countNonZero(regionHigh)<=mConfig.minimumClusterHighPixels)
         {
-            ++result.stats.regionsWithoutHighSupport;
+            audit.decisionReason = "empty_region";
+            if(collectAudit)
+                result.regionDecisionAudits.push_back(audit);
             continue;
         }
+        cv::Mat regionHigh;
+        cv::bitwise_and(regionMask,highEvidence,regionHigh);
+        audit.currentHighPixels = cv::countNonZero(regionHigh);
+        if(audit.currentHighPixels<=mConfig.minimumClusterHighPixels)
+        {
+            ++result.stats.regionsWithoutHighSupport;
+            audit.decisionReason = "insufficient_high_pixels";
+            if(collectAudit)
+                result.regionDecisionAudits.push_back(audit);
+            continue;
+        }
+        audit.passedMinimumHighPixels = true;
         ++result.stats.regionsWithHighSupport;
 
         std::vector<std::vector<cv::Point>> contours;
         std::vector<cv::Vec4i> hierarchy;
         cv::findContours(regionHigh,contours,hierarchy,
                          cv::RETR_CCOMP,cv::CHAIN_APPROX_NONE);
+        audit.highContourCount = static_cast<int>(contours.size());
         cv::Mat floodMask;
         cv::copyMakeBorder(regionMask,floodMask,1,1,1,1,
                            cv::BORDER_CONSTANT,0);
@@ -193,6 +226,7 @@ SInStyleRegionDynamicClassifier::Compute(
                 continue;
             }
             ++result.stats.eligibleContourCount;
+            ++audit.eligibleContourCount;
             cv::Point seed;
             bool foundSeed = false;
             for(const cv::Point &point : contour)
@@ -208,6 +242,7 @@ SInStyleRegionDynamicClassifier::Compute(
             if(!foundSeed)
                 continue;
             ++result.stats.validSeedContourCount;
+            ++audit.validSeedContourCount;
             cv::floodFill(result.lowResidualSupportMask,floodMask,seed,0,
                           nullptr,cv::Scalar(0),cv::Scalar(5),
                           8 | cv::FLOODFILL_MASK_ONLY | (50 << 8));
@@ -216,12 +251,17 @@ SInStyleRegionDynamicClassifier::Compute(
             1,1,regionLabels.cols,regionLabels.rows)).clone();
         cv::compare(filled,50,filled,cv::CMP_EQ);
         const int filledPixels = cv::countNonZero(filled);
+        audit.filledPixels = filledPixels;
+        audit.filledFraction = static_cast<double>(filledPixels)/
+            static_cast<double>(regionPixels);
         if(filledPixels>mConfig.wholeRegionFillFraction*regionPixels)
         {
             cv::bitwise_or(result.filledDynamicMaskBeforeDilation,
                            regionMask,
                            result.filledDynamicMaskBeforeDilation);
             ++result.stats.wholeDynamicRegionCount;
+            audit.outputState = "whole";
+            audit.decisionReason = "accepted_whole_region";
         }
         else if(filledPixels>0)
         {
@@ -229,7 +269,19 @@ SInStyleRegionDynamicClassifier::Compute(
                            filled,
                            result.filledDynamicMaskBeforeDilation);
             ++result.stats.partialDynamicRegionCount;
+            audit.outputState = "partial";
+            audit.decisionReason = "accepted_partial_region";
         }
+        else if(audit.highContourCount==0)
+            audit.decisionReason = "no_high_contours";
+        else if(audit.eligibleContourCount==0)
+            audit.decisionReason = "contour_geometry_rejected";
+        else if(audit.validSeedContourCount==0)
+            audit.decisionReason = "no_low_support_seed";
+        else
+            audit.decisionReason = "no_filled_support";
+        if(collectAudit)
+            result.regionDecisionAudits.push_back(audit);
     }
     result.stats.dynamicPixelsBeforeDilation = static_cast<std::size_t>(
         cv::countNonZero(result.filledDynamicMaskBeforeDilation));

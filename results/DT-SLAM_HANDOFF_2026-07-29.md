@@ -2073,3 +2073,129 @@ F1/q10。
 
 - `results/geometry_limited_closeout_2026-08-01/GEOMETRY_LIMITED_CLOSEOUT_SPEC.md`
 - `results/geometry_limited_closeout_2026-08-01/GEOMETRY_LIMITED_CLOSEOUT_RESULT.md`
+
+## 36. 2026-08-05 R0基线冻结与R1 Gazebo失败层审计完成
+
+R0已把Gazebo 600帧、配置、runner和评价协议冻结。纯ORB-SLAM2与全零语义
+路径三轮配对实验全部输出600/600帧；ATE差异方向随轮次改变，因此此前单轮差异
+不能归因于全零语义mask。R0 commit为`6c29ff8`，尚未推送。
+
+R1只增加显式开启的只读导出，记录DeepFlow、current-to-reference homography、
+残差、初始/梯度/RAG区域、逐区域分类原因、上一帧证据和最终mask。30帧开关对照
+中151个非计时检测字段零差异，29张动态深度mask逐像素一致；合成测试通过。
+
+完整600帧审计得到199个主要可见箱子帧。56帧箱体深度超过配置的6 m区域上限，
+因此没有箱体区域；剩余143帧中有82帧区域已经覆盖箱体中位95.9%、主区域纯度
+中位100%，但箱体high残差覆盖为0，全部被`insufficient_high_pixels`拒绝。
+近距离高运动阶段有58帧最终箱体覆盖超过75%，其中位覆盖约99.99%。可见箱体
+oracle区域仍有137/199帧high证据不足，故R1停止继续修改RAG、flood fill或最少
+high像素数。
+
+联系表同时显示地面、顶面和墙面存在大块残差；箱外含运动行人，不能把全部
+non-box统计称为静态误检。下一步按原计划只放行R2：固定DeepFlow、区域、
+classifier和temporal prior，对比current/oracle homography与Gazebo参考/在线
+SLAM RGB-D SE(3)补偿。R2首轮仍不改变SLAM。
+
+详细记录：
+
+- `results/r0_freeze_2026-08-05/R0_REPRODUCIBLE_BASELINE_SPEC.md`
+- `results/r0_freeze_2026-08-05/R0_BASELINE_EQUIVALENCE_RESULT.md`
+- `results/r1_gazebo_failure_layer_2026-08-05/R1_READ_ONLY_FAILURE_LAYER_AUDIT_SPEC.md`
+- `results/r1_gazebo_failure_layer_2026-08-05/R1_GAZEBO_FAILURE_LAYER_AUDIT_RESULT.md`
+- `DT-SLAM/tools/audit_r1_gazebo_failure_layers.py`
+
+## 37. 2026-08-05 R2 运动补偿单变量对照完成
+
+R2固定R1导出的599帧CPU DeepFlow、参考帧和箱体参考，不重新
+运行flow、不改变region/classifier/temporal prior，只离线对比五种
+相机运动补偿：当前PROSAC homography、oracle-static homography、Gazebo
+参考RGB-D/SE(3)、ORB-SLAM2事后轨迹SE(3)和历史常速度预测SE(3)。
+
+方向和数值不变量已通过；当前homography离线重算与R1量化残差的最大
+差为`0.007813 px`。Gazebo参考SE(3)在598/598个可比帧中均降低
+共同有效像素残差，中位数从`1.137 px`降至`0.406 px`。近3 m箱体
+high证据从84.97%提高至93.21%，箱外high从3.56%降至1.45%。
+
+但该结果只是几何上限。SIn风格detector在`Track()`之前运行，当帧最终
+ORB位姿当时不存在。事后SLAM SE(3)在393/598帧比当前homography残差更高，
+历史常速度SE(3)在506/598帧更高；箱外high比例中位数分别为28.10%
+和31.02%。两者均不可上线。即使使用Gazebo参考SE(3)，中距离和远距离
+箱体high比例中位数仍为0，说明SE(3)不是远小箱子召回的充分解。
+
+结论：R2证明全局homography的模型能力是背景残差的重要限制，但没有
+产出可部署的在线替换。根据预先冻结的停止条件，不把SE(3)接入正式
+detector，不新增一次Tracking或第三次PoseOptimization，不进入ATE系统
+实验，R3区域/分类器改造暂停。
+
+当前唯一后续是书面路线决策：若优先完成长期静态地图，可进入有SInDSLAM
+原文依据的R4/S4长时间隔Mapping精修；它只解决慢速/停留物体残影，
+不宣称修复远小箱子。OctoMap、plane edge、新flow和新融合仍未放行。
+
+详细记录：
+
+- `results/r2_ego_compensation_2026-08-05/R2_EGO_COMPENSATION_SHADOW_SPEC.md`
+- `results/r2_ego_compensation_2026-08-05/R2_EGO_COMPENSATION_SHADOW_RESULT.md`
+- `DT-SLAM/tools/audit_r2_ego_compensation.py`
+- `results/r2_ego_compensation_2026-08-05/analysis_final/`
+
+## 38. 2026-08-05 R4/S4 Mapping-only shadow完成并停止
+
+R2后先核对SInDSLAM原文、PaperNotes和公开Mapping源码。原文明确用每5帧
+取1帧的深度重投影处理慢速、间歇或短暂停留物体；公开`pubPointCloud.cc`
+中可核对到约0.13的相对深度条件和0.4的区域支持逻辑，但ROS关键帧缓存、
+降采样计数和前一mask传播与论文文字并不完全一一对应。
+
+因此R4实现为`paper-text-guided clean-room S4 replay`：仅离线复用冻结
+Gazebo 600帧的R1 mask、RAG labels和同一SLAM轨迹；每5个输入帧选一个
+sparse frame，用`tau_rep=0.13`和`tau_4=0.4`生成独立refined mapping mask。
+它不参与Tracking，不改S1–S3，不接OctoMap。
+
+119组sparse frame对中有40个箱体主要可见帧。29个当前S3漏检帧中，
+只有11帧出现任意新增箱体像素，没有一帧恢复至25%覆盖，最大最终覆盖
+16.42%。中距离3–6 m的新增箱体覆盖中位数仅0.14%；S4新增有效深度
+比例均值3.71%、第90百分位10.44%，却没有形成箱体恢复。整区域扩展仅
+发生在8/119帧。
+
+根据实施前冻结的停止条件，R4归档为有限负结果：不调`0.13/0.4`，
+不搜索时间间隔，不生成正式S3+S4点云，不接在线Mapping。R5 OctoMap也不
+放行，因为它不能补齐当前detector的中远距离漏检。
+
+当前进入R6收尾：冻结S1–S3主基线，整理现有TUM/Bonn/Gazebo轨迹、对象、
+深度和耗时证据，确定论文定位。不再新增检测模块、阈值或地图后端。
+
+详细记录：
+
+- `results/r2_ego_compensation_2026-08-05/R2_POST_DECISION.md`
+- `results/r4_s4_mapping_refinement_2026-08-05/R4_S4_LONG_INTERVAL_MAPPING_REFINEMENT_SHADOW_SPEC.md`
+- `results/r4_s4_mapping_refinement_2026-08-05/R4_S4_LONG_INTERVAL_MAPPING_REFINEMENT_SHADOW_RESULT.md`
+- `DT-SLAM/tools/audit_r4_long_interval_mapping_refinement.py`
+- `results/r4_s4_mapping_refinement_2026-08-05/analysis/`
+
+## 39. 2026-08-05 R6最终证据汇总完成
+
+R6没有新增算法或重跑选择性实验，而是把已有TUM、Bonn、Gazebo轨迹、
+Tracking、MapPoint、深度、点云和耗时结果按证据强度分为A/B/C/N四级。
+
+最强A级证据仍是Bonn `moving_nonobstructing_box` S2三轮控制对照：不过滤
+ATE中位`0.514344 m`，区域几何过滤后`0.022526 m`；三轮方向和量级
+稳定。Bonn强遮挡的最终fail-open版一轮完整轨迹，ATE从`0.546996 m`
+降至`0.245857 m`，但只作B级有限证据。TUM六序列四模式数值为单轮C级。
+
+Mapping侧的客观结论是：S3在Bonn同位姿点云中明显减少人物重影，但
+Gazebo中箱体逐帧覆盖中位数为0，箱子轨迹残影仍存在。R1/R2/R4分别
+排除了“优先修RAG”、“直接上线SE(3)”和“固定5帧S4能恢复箱子”。
+
+当前研究完成度：YOLO已知类别、SIn风格几何、动态ORB过滤、MapPoint写入
+否决和动态深度输出链已完成；跨域稳定未知箱子检测、长期干净稠密地图和
+30 FPS均未完成。论文定位应为系统集成、可复现实现和跨域失效分析；
+不能宣称已经形成跨域成立的新核心检测算法。
+
+本轮R0–R6计划到此完成。S1–S3保留为实验主基线；轻量LK、R2 SE(3)、
+R4 S4和OctoMap均保持关闭。后续若继续方法研究，应作为新的立项决策，
+不继续给R0–R6追加补丁阶段。
+
+详细记录：
+
+- `results/r6_final_evaluation_2026-08-05/R6_FINAL_EVALUATION_SCOPE.md`
+- `results/r6_final_evaluation_2026-08-05/R6_FINAL_EVIDENCE_SUMMARY.md`
+- `results/r6_final_evaluation_2026-08-05/r6_key_results.csv`
