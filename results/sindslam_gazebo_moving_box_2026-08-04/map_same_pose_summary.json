@@ -1,0 +1,15 @@
+{
+  "filtered_output": "/home/zhu/dynaslam_ws/results/sindslam_gazebo_moving_box_2026-08-04/map_geometry_filtered_stride8_step2.ply",
+  "filtered_points": 791311,
+  "frame_step": 2,
+  "frames": 299,
+  "maximum_depth_m": 6.0,
+  "method": "same-pose paired offline RGB-D point-cloud export",
+  "missing_mask_frames": 1,
+  "pixel_stride": 8,
+  "removed_fraction": 0.22845746288593655,
+  "removed_points": 234311,
+  "unfiltered_output": "/home/zhu/dynaslam_ws/results/sindslam_gazebo_moving_box_2026-08-04/map_unfiltered_stride8_step2.ply",
+  "unfiltered_points": 1025622,
+  "unmatched_pose_frames": 0
+}

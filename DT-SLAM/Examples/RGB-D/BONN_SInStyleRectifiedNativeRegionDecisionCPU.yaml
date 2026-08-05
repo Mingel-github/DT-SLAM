@@ -1,0 +1,103 @@
+%YAML:1.0
+
+# Formal Bonn SIn-style configuration. It is identical to the paired control
+# in camera domain and ORB parameters; only the SIn-style detector is added.
+Camera.fx: 542.822841
+Camera.fy: 542.576870
+Camera.cx: 315.593520
+Camera.cy: 237.756098
+Camera.k1: 0.0
+Camera.k2: 0.0
+Camera.p1: 0.0
+Camera.p2: 0.0
+Camera.k3: 0.0
+Camera.width: 640
+Camera.height: 480
+Camera.fps: 30.0
+Camera.bf: 40.0
+Camera.RGB: 1
+
+RGBD.InputRectification.Enable: 1
+RGBD.InputRectification.fx: 542.822841
+RGBD.InputRectification.fy: 542.576870
+RGBD.InputRectification.cx: 315.593520
+RGBD.InputRectification.cy: 237.756098
+RGBD.InputRectification.k1: 0.039903
+RGBD.InputRectification.k2: -0.099343
+RGBD.InputRectification.p1: -0.000730
+RGBD.InputRectification.p2: -0.000144
+RGBD.InputRectification.k3: 0.000000
+
+ThDepth: 40.0
+DepthMapFactor: 5000.0
+
+ORBextractor.nFeatures: 1500
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Geometry.Enable: 0
+
+SInStyle.ShadowEnable: 1
+SInStyle.Backend: "reference_replay"
+SInStyle.ReferenceBackend: "deepflow_cpu"
+SInStyle.ReferenceDirectory: "."
+SInStyle.ReferenceMaskSuffix: "_mask_pre_runner_dilate.png"
+SInStyle.RequireLabels: 0
+SInStyle.LogEveryN: 10
+SInStyle.CsvPath: ""
+
+SInStyle.NativeInitialRegionsEnable: 1
+SInStyle.NativeClusterPixelDivisor: 25600.0
+SInStyle.NativeMaximumDepthM: 6.0
+SInStyle.NativeKMeansMaxIterations: 4
+SInStyle.NativeKMeansEpsilon: 0.07
+SInStyle.NativeKMeansAttempts: 1
+SInStyle.NativeKMeansSeed: 2025
+SInStyle.NativeCoarseToFine: 1
+SInStyle.NativePyramidLevels: 4
+SInStyle.NativeTemporalInitialization: 1
+SInStyle.NativeTemporalCommitStartInputIndex: 1
+
+SInStyle.NativeGradientSplitEnable: 1
+SInStyle.NativeGradientRelativeThreshold: 0.025
+SInStyle.NativeGradientAbsoluteThresholdM: 0.08
+SInStyle.NativeGradientMedianRadius: 2
+SInStyle.NativeGradientMinimumSupport: 5
+SInStyle.NativeGradientConnectivity: 8
+SInStyle.NativeGradientSmallComponentAuditPixels: 80
+
+SInStyle.NativeRAGMergeEnable: 1
+SInStyle.NativeRAGAdjacencyDilationRadius: 3
+SInStyle.NativeRAGHistogramBins: 256
+SInStyle.NativeRAGAdjacencyThresholdPixels: 200.0
+SInStyle.NativeRAGAreaDepthScoreWeight: 0.05
+SInStyle.NativeRAGFakeEdgeWeight: 0.01
+SInStyle.NativeRAGLargeRegionWeight: 0.7
+SInStyle.NativeRAGMiddleRegionWeight: 1.0
+SInStyle.NativeRAGSmallRegionWeight: 2.0
+SInStyle.NativeRAGMergeThreshold: 0.9
+SInStyle.NativeRAGDepthRejectThreshold: 0.2
+SInStyle.NativeRAGHighMiddleFraction: 0.7
+SInStyle.NativeRAGLargeFraction: 0.5
+SInStyle.NativeRAGSmallFraction: 0.7
+
+SInStyle.DenseFlowResidualEnable: 1
+SInStyle.DenseFlowResidualBackend: "deepflow_cpu"
+SInStyle.DenseFlowResidualRequireReference: 0
+SInStyle.DenseFlowUseTemporalRegionPrior: 1
+
+SInStyle.RegionDynamicShadowEnable: 1
+SInStyle.RegionDynamicLabelSource: "native_rag"
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

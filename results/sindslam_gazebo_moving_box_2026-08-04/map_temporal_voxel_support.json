@@ -1,0 +1,56 @@
+{
+  "filtered_unique_voxels": 53113,
+  "filtered_voxel_frame_observations": 452507,
+  "frame_step": 2,
+  "frames": 299,
+  "fully_removed_unique_voxel_fraction": 0.06198894442187804,
+  "fully_removed_unique_voxels": 3510,
+  "interpretation_limit": "Low temporal support is a transient/ghost proxy, not object ground truth; pose error, occlusion, viewpoint coverage, and voxel quantization also affect support.",
+  "maximum_depth_m": 6.0,
+  "method": "same-pose temporal voxel-support proxy audit",
+  "missing_mask_frames": 1,
+  "pixel_stride": 8,
+  "support_bins": {
+    "support_1": {
+      "filtered_frame_observations": 6887,
+      "frame_observation_removal_fraction": 0.25602246948255375,
+      "fully_removed_voxel_fraction": 0.25602246948255375,
+      "fully_removed_voxels": 2370,
+      "removed_frame_observations": 2370,
+      "unfiltered_frame_observations": 9257,
+      "unfiltered_voxels": 9257
+    },
+    "support_2_to_3": {
+      "filtered_frame_observations": 25407,
+      "frame_observation_removal_fraction": 0.11133263378803777,
+      "fully_removed_voxel_fraction": 0.05110043005312421,
+      "fully_removed_voxels": 606,
+      "removed_frame_observations": 3183,
+      "unfiltered_frame_observations": 28590,
+      "unfiltered_voxels": 11859
+    },
+    "support_4_to_7": {
+      "filtered_frame_observations": 59532,
+      "frame_observation_removal_fraction": 0.12788960182825,
+      "fully_removed_voxel_fraction": 0.024890761548064917,
+      "fully_removed_voxels": 319,
+      "removed_frame_observations": 8730,
+      "unfiltered_frame_observations": 68262,
+      "unfiltered_voxels": 12816
+    },
+    "support_8_plus": {
+      "filtered_frame_observations": 360681,
+      "frame_observation_removal_fraction": 0.1634423366400015,
+      "fully_removed_voxel_fraction": 0.009475122295183113,
+      "fully_removed_voxels": 215,
+      "removed_frame_observations": 70468,
+      "unfiltered_frame_observations": 431149,
+      "unfiltered_voxels": 22691
+    }
+  },
+  "unfiltered_unique_voxels": 56623,
+  "unfiltered_voxel_frame_observations": 537258,
+  "unmatched_pose_frames": 0,
+  "voxel_frame_observation_removal_fraction": 0.15774730204110501,
+  "voxel_size_m": 0.05
+}

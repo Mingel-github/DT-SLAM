@@ -1,0 +1,19 @@
+{
+  "box_half_extent_with_tolerance_m": 0.32,
+  "box_pixel_weighted_recall": 0.6415026705380507,
+  "frames_with_mask": 599,
+  "interpretation_limit": "The volume test uses synchronized /odom and /box_odom plus known camera extrinsics; a 0.32 m half extent and stride-2 depth sampling approximate visible box pixels.",
+  "mask_pixel_weighted_precision_to_box": 0.15486684820233534,
+  "maximum_box_odom_time_difference_s": 0.0049999999999954525,
+  "maximum_odom_time_difference_s": 0.016999999999939064,
+  "method": "Gazebo odometry and known 0.6 m box volume projected through measured RGB-D depth",
+  "per_visible_frame_box_recall_mean": 0.4129346669597104,
+  "per_visible_frame_box_recall_median": 0.0,
+  "per_visible_frame_box_recall_p10": 0.0,
+  "per_visible_frame_box_recall_p90": 1.0,
+  "per_visible_frame_mask_precision_mean": 0.22067817537335005,
+  "sample_stride": 2,
+  "visible_frames_min_25_sampled_box_pixels": 143,
+  "visible_frames_recall_above_0_75": 58,
+  "visible_frames_recall_below_0_25": 82
+}

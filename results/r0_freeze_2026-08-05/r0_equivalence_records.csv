@@ -1,0 +1,7 @@
+repeat,mode,directory,commit,tracked_dirty,status,return_code,trajectory_poses,keyframes,ate_rmse_m,rpe_rmse_m,actual_fps,deadline_missed,semantic_masks_ready,semantic_provider_cuda,depth_filter_rows,semantic_dynamic_pixels_total,rejected_valid_depth_pixels_total,all_zero_semantic_mask
+repeat1,orb_baseline,/home/zhu/dynaslam_ws/results/sindslam_gazebo_moving_box_2026-08-04/runs/orb_baseline,16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284,False,completed,0,600,81,0.028619,0.010163,19.9535,0,,False,0,,,
+repeat1,semantic_only,/home/zhu/dynaslam_ws/results/sindslam_gazebo_moving_box_2026-08-04/runs/semantic_only,16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284,False,completed,0,600,81,0.039638,0.010807,19.9518,0,600,True,600,0,0,True
+repeat2,orb_baseline,/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat2/orb_baseline,16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284,False,completed,0,600,85,0.033688,0.010298,19.9473,0,,False,0,,,
+repeat2,semantic_only,/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat2/semantic_only,16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284,False,completed,0,600,78,0.02954,0.011145,19.9437,0,600,True,600,0,0,True
+repeat3,orb_baseline,/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat3/orb_baseline,16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284,False,completed,0,600,82,0.03643,0.009773,19.9455,0,,False,0,,,
+repeat3,semantic_only,/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat3/semantic_only,16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284,False,completed,0,600,81,0.032811,0.011137,19.9456,0,600,True,600,0,0,True

@@ -1,0 +1,215 @@
+{
+  "protocol": {
+    "groundtruth": "/data/dynaslam/datasets/dtslam_gazebo_person_box_tum_run1_2026-08-01/groundtruth.txt",
+    "input_frames": 600,
+    "viewer": "off",
+    "evo_alignment": "SE(3) Umeyama",
+    "evo_max_timestamp_difference_seconds": 0.02,
+    "rpe_delta": "1 output frame"
+  },
+  "records": [
+    {
+      "repeat": "repeat1",
+      "mode": "orb_baseline",
+      "directory": "/home/zhu/dynaslam_ws/results/sindslam_gazebo_moving_box_2026-08-04/runs/orb_baseline",
+      "commit": "16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284",
+      "tracked_dirty": false,
+      "status": "completed",
+      "return_code": 0,
+      "trajectory_poses": 600,
+      "keyframes": 81,
+      "ate_rmse_m": 0.028619,
+      "rpe_rmse_m": 0.010163,
+      "actual_fps": 19.9535,
+      "deadline_missed": 0,
+      "semantic_masks_ready": null,
+      "semantic_provider_cuda": false,
+      "depth_filter_rows": 0,
+      "semantic_dynamic_pixels_total": null,
+      "rejected_valid_depth_pixels_total": null,
+      "all_zero_semantic_mask": null
+    },
+    {
+      "repeat": "repeat1",
+      "mode": "semantic_only",
+      "directory": "/home/zhu/dynaslam_ws/results/sindslam_gazebo_moving_box_2026-08-04/runs/semantic_only",
+      "commit": "16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284",
+      "tracked_dirty": false,
+      "status": "completed",
+      "return_code": 0,
+      "trajectory_poses": 600,
+      "keyframes": 81,
+      "ate_rmse_m": 0.039638,
+      "rpe_rmse_m": 0.010807,
+      "actual_fps": 19.9518,
+      "deadline_missed": 0,
+      "semantic_masks_ready": 600,
+      "semantic_provider_cuda": true,
+      "depth_filter_rows": 600,
+      "semantic_dynamic_pixels_total": 0,
+      "rejected_valid_depth_pixels_total": 0,
+      "all_zero_semantic_mask": true
+    },
+    {
+      "repeat": "repeat2",
+      "mode": "orb_baseline",
+      "directory": "/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat2/orb_baseline",
+      "commit": "16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284",
+      "tracked_dirty": false,
+      "status": "completed",
+      "return_code": 0,
+      "trajectory_poses": 600,
+      "keyframes": 85,
+      "ate_rmse_m": 0.033688,
+      "rpe_rmse_m": 0.010298,
+      "actual_fps": 19.9473,
+      "deadline_missed": 0,
+      "semantic_masks_ready": null,
+      "semantic_provider_cuda": false,
+      "depth_filter_rows": 0,
+      "semantic_dynamic_pixels_total": null,
+      "rejected_valid_depth_pixels_total": null,
+      "all_zero_semantic_mask": null
+    },
+    {
+      "repeat": "repeat2",
+      "mode": "semantic_only",
+      "directory": "/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat2/semantic_only",
+      "commit": "16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284",
+      "tracked_dirty": false,
+      "status": "completed",
+      "return_code": 0,
+      "trajectory_poses": 600,
+      "keyframes": 78,
+      "ate_rmse_m": 0.02954,
+      "rpe_rmse_m": 0.011145,
+      "actual_fps": 19.9437,
+      "deadline_missed": 0,
+      "semantic_masks_ready": 600,
+      "semantic_provider_cuda": true,
+      "depth_filter_rows": 600,
+      "semantic_dynamic_pixels_total": 0,
+      "rejected_valid_depth_pixels_total": 0,
+      "all_zero_semantic_mask": true
+    },
+    {
+      "repeat": "repeat3",
+      "mode": "orb_baseline",
+      "directory": "/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat3/orb_baseline",
+      "commit": "16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284",
+      "tracked_dirty": false,
+      "status": "completed",
+      "return_code": 0,
+      "trajectory_poses": 600,
+      "keyframes": 82,
+      "ate_rmse_m": 0.03643,
+      "rpe_rmse_m": 0.009773,
+      "actual_fps": 19.9455,
+      "deadline_missed": 0,
+      "semantic_masks_ready": null,
+      "semantic_provider_cuda": false,
+      "depth_filter_rows": 0,
+      "semantic_dynamic_pixels_total": null,
+      "rejected_valid_depth_pixels_total": null,
+      "all_zero_semantic_mask": null
+    },
+    {
+      "repeat": "repeat3",
+      "mode": "semantic_only",
+      "directory": "/home/zhu/dynaslam_ws/results/r0_freeze_2026-08-05/runs/repeat3/semantic_only",
+      "commit": "16ea79dff58d7d20e7d18bf5ef1b41f6ed4a9284",
+      "tracked_dirty": false,
+      "status": "completed",
+      "return_code": 0,
+      "trajectory_poses": 600,
+      "keyframes": 81,
+      "ate_rmse_m": 0.032811,
+      "rpe_rmse_m": 0.011137,
+      "actual_fps": 19.9456,
+      "deadline_missed": 0,
+      "semantic_masks_ready": 600,
+      "semantic_provider_cuda": true,
+      "depth_filter_rows": 600,
+      "semantic_dynamic_pixels_total": 0,
+      "rejected_valid_depth_pixels_total": 0,
+      "all_zero_semantic_mask": true
+    }
+  ],
+  "paired_differences": [
+    {
+      "repeat": "repeat1",
+      "semantic_minus_orb_ate_rmse_m": 0.011019000000000001,
+      "semantic_minus_orb_rpe_rmse_m": 0.0006440000000000005,
+      "semantic_minus_orb_keyframes": 0
+    },
+    {
+      "repeat": "repeat2",
+      "semantic_minus_orb_ate_rmse_m": -0.004148000000000002,
+      "semantic_minus_orb_rpe_rmse_m": 0.0008470000000000005,
+      "semantic_minus_orb_keyframes": -7
+    },
+    {
+      "repeat": "repeat3",
+      "semantic_minus_orb_ate_rmse_m": -0.0036189999999999972,
+      "semantic_minus_orb_rpe_rmse_m": 0.001363999999999999,
+      "semantic_minus_orb_keyframes": -1
+    }
+  ],
+  "mode_summary": {
+    "orb_baseline": {
+      "runs": 3,
+      "ate_rmse_m": {
+        "median": 0.033688,
+        "minimum": 0.028619,
+        "maximum": 0.03643,
+        "range": 0.0078109999999999985
+      },
+      "rpe_rmse_m": {
+        "median": 0.010163,
+        "minimum": 0.009773,
+        "maximum": 0.010298,
+        "range": 0.0005249999999999994
+      },
+      "keyframes": {
+        "median": 82,
+        "minimum": 81,
+        "maximum": 85,
+        "range": 4
+      },
+      "trajectory_complete_all": true,
+      "deadline_missed_total": 0
+    },
+    "semantic_only": {
+      "runs": 3,
+      "ate_rmse_m": {
+        "median": 0.032811,
+        "minimum": 0.02954,
+        "maximum": 0.039638,
+        "range": 0.010098
+      },
+      "rpe_rmse_m": {
+        "median": 0.011137,
+        "minimum": 0.010807,
+        "maximum": 0.011145,
+        "range": 0.00033799999999999976
+      },
+      "keyframes": {
+        "median": 81,
+        "minimum": 78,
+        "maximum": 81,
+        "range": 3
+      },
+      "trajectory_complete_all": true,
+      "deadline_missed_total": 0
+    }
+  },
+  "invariants": {
+    "same_commit_all": true,
+    "tracked_clean_all": true,
+    "completed_all": true,
+    "trajectory_complete_all": true,
+    "semantic_cuda_all": true,
+    "semantic_masks_ready_all": true,
+    "semantic_dynamic_pixels_zero_all": true
+  }
+}

@@ -1,6 +1,6 @@
 # DT-SLAM 项目交接说明
 
-更新时间：2026-08-04
+更新时间：2026-08-05
 工作区：`/home/zhu/dynaslam_ws`
 源代码：`/home/zhu/dynaslam_ws/DT-SLAM`
 
@@ -9,8 +9,8 @@
 ## 0. 2026-08-04 当前权威状态
 
 本文第 1--35 节保留历史路线和负实验，不能把其中旧 commit 或“下一步”覆盖当前状态。
-当前工作区 HEAD 为 `220fed6`，SIn 风格 S1/S2/S3 改动仍未提交；本地工作区继续作为
-权威版本。
+当前算法检查点为 `16ea79d`，SIn 风格 S1/S2/S3 已提交并推送。工作区中的大型
+实验产物仍只保存在本地；本地原始日志优先于摘要，Git 用于保存代码、配置和轻量报告。
 
 当前主线：
 
@@ -21,6 +21,23 @@
 | S2：region mask → ORB feature filter | 已完成限定验收、默认关闭；最小原生条件 fail-open 消除已观察到的 obstructing 长段 LOST |
 | S3：映射侧动态深度过滤 | 工程接口、合成测试、Bonn 动态/静态首轮和同位姿点云已完成；默认关闭，地图质量未放行 |
 | S4：长间隔精修 | 未开始；只有成对点云确认慢速/间歇运动残影后才考虑 |
+
+2026-08-05 已冻结新的 R0--R6 因果审计计划。当前执行状态：R0 三轮 Gazebo
+纯 ORB 与全零语义路径配对重复实验已完成；R1 的
+`flow -> ego compensation -> residual -> region -> classifier -> temporal`
+只读失败层审计是唯一下一步。在 R1 报告完成前，不实施 S4、OctoMap、SE(3)
+替换、classifier 修改、plane edge 或新融合。
+
+R0 关键结论：纯 ORB 三轮 ATE 范围为 `0.028619--0.036430 m`，全零语义路径为
+`0.029540--0.039638 m`；配对差异方向发生反转。三轮 semantic-only 均使用 CUDA，
+600/600 mask 同帧可用，语义动态像素和被拒绝深度均为 0。因此先前单轮差异不能归因于
+语义 mask，厘米以内的单轮 ATE 变化不能单独作为方法收益。
+
+详细记录：
+
+- `results/DT-SLAM_R0-R6_因果审计与后续研究计划_2026-08-05.md`
+- `results/r0_freeze_2026-08-05/R0_REPRODUCIBLE_BASELINE_SPEC.md`
+- `results/r0_freeze_2026-08-05/R0_BASELINE_EQUIVALENCE_RESULT.md`
 
 最重要的新证据：
 
