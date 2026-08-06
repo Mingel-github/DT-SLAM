@@ -2199,3 +2199,77 @@ R4 S4和OctoMap均保持关闭。后续若继续方法研究，应作为新的�
 - `results/r6_final_evaluation_2026-08-05/R6_FINAL_EVALUATION_SCOPE.md`
 - `results/r6_final_evaluation_2026-08-05/R6_FINAL_EVIDENCE_SUMMARY.md`
 - `results/r6_final_evaluation_2026-08-05/r6_key_results.csv`
+
+## 40. 2026-08-06 固定轨迹离线 Mapping 可行性验证
+
+R6之后没有重新开放检测算法。为回答普通累计点云为何永久保留Gazebo箱子轨迹，
+本轮固定同一RGB-D、纯ORB-SLAM2轨迹、采样与体素参数，只比较端点累计、时间
+支持和标准OctoMap occupied/free更新。10 cm主实验中，不使用动态mask的
+OctoMap已将箱子专属残影候选从100%降到2.39%；加入当前S3后降到0%。约
+92.17%的旧箱子体素在箱子离开后确实被后续非箱子射线重新穿过，支持“自由空间
+反证撤销历史占用”的解释。
+
+补充的S3＋时间支持对照中，S3直接累计仍保留75.17%箱子候选，S3＋至少3帧
+降到14.71%，S3＋至少8帧降到0%。固定3/8帧是项目级`[S/H]`工作点，不是论文
+参数；当前0%只对0.5 m/s匀速箱子、约10 Hz采样与10 cm体素成立。OctoMap与
+时间支持语义不同：前者能用free射线撤销旧占用，后者只延迟确认重复端点。
+
+该实验是离线固定轨迹可行性验证，不是在线Mapping，也没有证明静态地图真实
+completeness。≥8帧持续非箱子保留率在纯ORB轨迹下约69.9%（OctoMap），其中
+仍混有动态人物和位姿量化影响。详细记录：
+
+- `results/offline_mapping_feasibility_2026-08-06/OFFLINE_FIXED_TRAJECTORY_MAPPING_FEASIBILITY_RESULT.md`
+- `DT-SLAM/tools/offline_gazebo_occupancy_audit.cc`
+- `/data/dynaslam/large_results/offline_mapping_feasibility_2026-08-06/`
+
+## 41. 2026-08-06 AWS Small House 正式人与箱子序列四模式完成
+
+为降低旧回字走廊重复砖纹理、物体稀少和疑似错误回环的影响，本轮在AWS Small
+House录制316.6 s、6328对精确同步RGB-D。人物与箱子均自动持续运动，机器人由
+用户人工驾驶约38.76 m；路线不闭环，起终点相距约4.18 m。转换、深度尺度、
+内参和相机真值方向均通过检查。
+
+四模式单轮完整结果如下：纯ORB ATE/RPE为0.059334/0.005624 m、覆盖94.82%；
+仅语义为0.055089/0.004836 m、覆盖96.19%；仅SIn风格区域几何为
+0.056881/0.006505 m、覆盖97.09%；语义OR几何为0.057982/0.005938 m、覆盖
+97.42%。仅语义单轮ATE/RPE最好，组合覆盖最高；几何与组合没有稳定降低局部
+误差，简单OR未优于仅语义。由于每模式只有一轮且覆盖时间戳集合不同，小幅差异
+不能写成稳定增益。
+
+语义两次均为6328/6328同帧mask，age中位数/最大值均为0，约20 FPS。几何在
+2491帧产生非零动态区域，总体拒绝约6.77%有效深度；组合拒绝约8.05%，并触发
+54帧fail-open。CPU DeepFlow平均约156 ms，使仅几何和组合分别只有4.57和
+4.38 FPS；GPU YOLO约9.6 ms，不是当前主瓶颈。
+
+当前新场景的Tracking/检测/性能闭环已完成；正式计时未写出全序列S3 mask，
+因此新场景点云残影、时间支持和OctoMap对照尚未完成。详细记录：
+
+- `results/aws_small_house_formal_2026-08-06/AWS_SMALL_HOUSE_PERSON_BOX_FOUR_MODE_RESULT.md`
+- `/data/dynaslam/datasets/aws_small_house_person_box_formal_run1_20260806/`
+- `/data/dynaslam/datasets/aws_small_house_person_box_tum_run1_20260806/`
+
+## 42. 2026-08-07 AWS完整S3导出与Mapping复核
+
+AWS Small House 6328帧组合模式S3导出已正常完成，返回码0。6328/6328帧完成检测，
+语义mask age中位数和最大值均为0；6165帧具有有效Mapping输出并写出动态深度mask，
+163帧因无有效Mapping位姿按设计不输出。包含逐帧PNG和完整诊断写盘的任务实际吞吐
+3.27 FPS，不能替代不写mask的正式4.38 FPS计时。
+
+固定同一条组合模式轨迹，以3081个采样帧、10 cm体素和每8像素采样比较后：普通累计
+箱子残影代理100%，S3直接累计96.35%，至少8帧不用S3为11.60%，S3＋至少8帧为
+8.38%，OctoMap不用mask为42.43%，S3＋OctoMap为36.31%。该结果没有复现旧600帧
+片段的0%。
+
+机制差异已有直接数据支持：AWS箱子只在约2.01 m范围内反复运动，总路程157.19 m，
+约合78次单程经过；旧Gazebo范围约10.02 m、约17次。更关键的是，旧箱子体素在最后
+命中后被非箱子射线重新穿过的比例从旧序列92.17%降到AWS 5.80%，OctoMap缺少free
+反证。当前AWS最强结果主要来自正时间支持，S3只把11.60%进一步降到8.38%。
+
+权威记录：
+
+- `results/aws_small_house_formal_2026-08-06/AWS_SMALL_HOUSE_FIXED_TRAJECTORY_MAPPING_RESULT.md`
+- `results/DT-SLAM_当前成果与已解决问题_GPT同步_2026-08-07.md`
+- `/data/dynaslam/large_results/aws_small_house_formal_2026-08-06/mapping_comparison_res10cm_step2_stride8/`
+
+本结果再次冻结以下边界：旧Gazebo的0%不能跨轨迹外推；8帧是项目工作点；OctoMap
+不是动态检测器；当前离线Mapping不等于在线长期地图。

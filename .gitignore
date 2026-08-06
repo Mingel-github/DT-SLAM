@@ -41,4 +41,12 @@ results/**/*.png
 results/**/*.txt
 results/**/*.ply
 results/**/*.pcd
+results/**/*.zip
+results/**/*.pdf
+results/**/*.stdout
 .local_sindslam_raw_export/
+
+# Accidental out-of-tree CMake products
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake

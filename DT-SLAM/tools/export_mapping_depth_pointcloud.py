@@ -82,7 +82,7 @@ def nearest_pose(poses, timestamp, maximum_difference):
 
 
 def load_frame(root, row, mask_path, depth_factor, maximum_depth,
-               stride, apply_mask):
+               stride, apply_mask, dynamic_threshold):
     color = cv2.imread(str(root / row["rgb"]), cv2.IMREAD_COLOR)
     depth_raw = cv2.imread(str(root / row["depth"]), cv2.IMREAD_UNCHANGED)
     mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
@@ -97,20 +97,21 @@ def load_frame(root, row, mask_path, depth_factor, maximum_depth,
     if maximum_depth > 0.0:
         valid &= sampled_depth <= maximum_depth
     if apply_mask:
-        valid &= mask[::stride, ::stride] == 0
+        valid &= mask[::stride, ::stride] < dynamic_threshold
     return color[::stride, ::stride], sampled_depth, valid
 
 
-def count_points(frames, root, depth_factor, maximum_depth, stride):
+def count_points(frames, root, depth_factor, maximum_depth, stride,
+                 dynamic_threshold):
     unfiltered = 0
     filtered = 0
     for frame in frames:
         _, _, valid_all = load_frame(
             root, frame["association"], frame["mask"], depth_factor,
-            maximum_depth, stride, False)
+            maximum_depth, stride, False, dynamic_threshold)
         _, _, valid_filtered = load_frame(
             root, frame["association"], frame["mask"], depth_factor,
-            maximum_depth, stride, True)
+            maximum_depth, stride, True, dynamic_threshold)
         unfiltered += int(np.count_nonzero(valid_all))
         filtered += int(np.count_nonzero(valid_filtered))
     return unfiltered, filtered
@@ -129,10 +130,10 @@ def write_header(stream, point_count):
 
 
 def append_frame(stream, root, frame, fx, fy, cx, cy, depth_factor,
-                 maximum_depth, stride, apply_mask):
+                 maximum_depth, stride, apply_mask, dynamic_threshold):
     color, depth, valid = load_frame(
         root, frame["association"], frame["mask"], depth_factor,
-        maximum_depth, stride, apply_mask)
+        maximum_depth, stride, apply_mask, dynamic_threshold)
     rows, cols = np.indices(depth.shape, dtype=np.float32)
     u = cols * stride
     v = rows * stride
@@ -162,6 +163,13 @@ def main():
     parser.add_argument("--associations", required=True)
     parser.add_argument("--trajectory", required=True)
     parser.add_argument("--mask-directory", required=True)
+    parser.add_argument(
+        "--mask-pattern",
+        default="frame_{index:06d}_dynamic_depth_mask.png",
+        help="Python format pattern relative to mask-directory")
+    parser.add_argument(
+        "--dynamic-threshold", type=int, default=1,
+        help="mask values greater than or equal to this are omitted")
     parser.add_argument("--unfiltered-output", required=True)
     parser.add_argument("--filtered-output", required=True)
     parser.add_argument("--summary-output", required=True)
@@ -179,6 +187,8 @@ def main():
     args = parser.parse_args()
     if args.pixel_stride < 1 or args.frame_step < 1:
         raise ValueError("pixel stride and frame step must be positive")
+    if not 0 <= args.dynamic_threshold <= 255:
+        raise ValueError("dynamic threshold must be in [0,255]")
 
     root = Path(args.dataset_root)
     mask_directory = Path(args.mask_directory)
@@ -193,7 +203,7 @@ def main():
     for index, row in enumerate(selected_associations):
         if index % args.frame_step != 0:
             continue
-        mask = mask_directory / f"frame_{index:06d}_dynamic_depth_mask.png"
+        mask = mask_directory / args.mask_pattern.format(index=index)
         if not mask.is_file():
             missing_mask += 1
             continue
@@ -209,7 +219,7 @@ def main():
 
     unfiltered_count, filtered_count = count_points(
         frames, root, args.depth_factor, args.maximum_depth,
-        args.pixel_stride)
+        args.pixel_stride, args.dynamic_threshold)
     output_pairs = [
         (Path(args.unfiltered_output), unfiltered_count, False),
         (Path(args.filtered_output), filtered_count, True),
@@ -222,7 +232,7 @@ def main():
                 append_frame(
                     stream, root, frame, args.fx, args.fy, args.cx,
                     args.cy, args.depth_factor, args.maximum_depth,
-                    args.pixel_stride, apply_mask)
+                    args.pixel_stride, apply_mask, args.dynamic_threshold)
 
     summary = {
         "method": "same-pose paired offline RGB-D point-cloud export",
@@ -230,6 +240,8 @@ def main():
         "frame_step": args.frame_step,
         "pixel_stride": args.pixel_stride,
         "maximum_depth_m": args.maximum_depth,
+        "mask_pattern": args.mask_pattern,
+        "dynamic_threshold": args.dynamic_threshold,
         "unmatched_pose_frames": unmatched_pose,
         "missing_mask_frames": missing_mask,
         "unfiltered_points": unfiltered_count,
