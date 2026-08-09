@@ -1,0 +1,183 @@
+\documentclass[10pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,graphicx,enumitem}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,allcolors=blue]{hyperref}
+
+\title{DT-SLAM: Semantic and Region-Geometric Dynamic Filtering for RGB-D ORB-SLAM2}
+\author{Anonymous authors}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Dynamic objects violate the static-scene assumption of feature-based RGB-D SLAM: they can corrupt visual correspondences during tracking and leave residual artifacts in accumulated maps. However, semantic masks alone cannot cover category-unknown moving objects, while geometry-only evidence is vulnerable to motion estimation, depth, and optical-flow errors. We present DT-SLAM, an RGB-D extension of ORB-SLAM2 that combines synchronous YOLOv8 person masks with SInDSLAM-style category-independent region geometry. The geometry branch reorganizes depth-derived 3-D regions, compares dense observed flow with a camera-motion model, and makes region-constrained dynamic decisions. Dynamic observations are excluded from matching and new MapPoint creation; a fail-open safeguard preserves tracking when geometry filtering would otherwise remove too many constraints. On TUM \texttt{fr3/walking\_xyz}, person masking reduces the median ATE RMSE from $0.731$~m to $0.016$~m over three runs. On the Bonn non-obstructing moving-box sequence, enabling the region-geometric filter reduces the three-run median ATE RMSE from $0.514$~m to $0.023$~m while retaining all 778 poses. Additional experiments show that the geometry branch is scene dependent and currently operates at 3.2--4.6 FPS. Fixed-trajectory mapping analyses further show that framewise filtering alone is insufficient for reliable removal of historical dynamic artifacts.
+\end{abstract}
+
+\section{Introduction}
+
+RGB-D SLAM systems estimate camera motion and reconstruct environments by assuming that the scene geometry used for correspondence is static. This assumption is violated in human-populated and changing environments: independently moving objects can introduce inconsistent feature matches, degrade pose estimation, and be accumulated into maps. Semantic dynamic-SLAM systems address part of this problem by masking classes such as people \citep{dynaslam,dgs,ji2021}. Yet a semantic category is not equivalent to current motion, and objects outside the configured classes remain unhandled.
+
+Geometry provides complementary evidence because an independently moving region exhibits image motion that cannot be explained by camera motion alone. Prior dynamic SLAM systems have used multi-view depth consistency \citep{dynaslam}, reconstruction residuals \citep{refusion,detectfusion}, optical-flow residuals \citep{flowfusion}, and depth-based clustering \citep{ji2021}. SInDSLAM further combines depth-aware region re-clustering with dense-flow residuals for semantic-independent dynamic-region detection \citep{sindslam}. These methods motivate a region-level treatment of motion evidence, but their complete pipelines use assumptions and components that cannot be transferred verbatim to an ORB-SLAM2 front end.
+
+This work studies a bounded integration of semantic and region-geometric evidence in RGB-D ORB-SLAM2 \citep{orbslam2}. Figure~\ref{fig:pipeline} will illustrate the final pipeline. DT-SLAM uses a synchronous YOLOv8-seg branch for the configured \texttt{person} class and a clean-room, SInDSLAM-style region-geometric branch for category-independent motion evidence. The latter is not an equivalent reproduction of SInDSLAM: the current implementation uses depth-gradient boundaries and a region adjacency graph, but does not retain the original PEAC/AHC planar-edge chain or its complete mapping pipeline.
+
+The contributions of this paper are as follows:
+\begin{enumerate}[leftmargin=*]
+  \item We present DT-SLAM, an RGB-D ORB-SLAM2 system that maps synchronous semantic and region-geometric masks to feature matching, pre-optimization association cleanup, MapPoint creation control, and a static-depth mapping output.
+  \item We implement a SInDSLAM-style category-independent region detector that uses 3-D K-means only as an initial partition, then combines depth-boundary splitting, region-adjacency merging, dense-flow residuals, and region-constrained propagation.
+  \item We introduce a fail-open tracking safeguard for cases in which geometry filtering would violate the native ORB-SLAM2 matching requirement. In the Bonn strong-occlusion sequence, it restores a complete 589-frame trajectory after an older filter lost 200 frames.
+  \item We report repeated localization results for known-person and category-unknown moving-object sequences, and separate fixed-trajectory mapping analyses that expose the limits of framewise dynamic-depth filtering.
+\end{enumerate}
+
+\begin{figure}[t]
+\centering
+\fbox{\parbox[c][1.35in][c]{0.88\linewidth}{\centering
+\textbf{Draft figure placeholder.}\\
+Replace with the DT-SLAM system overview: RGB-D input, synchronous person
+masking, region geometry, ORB-SLAM2 tracking/MapPoint controls, and
+static-depth output.}}
+\caption{Planned overview of DT-SLAM. This placeholder is included only to
+keep the initial manuscript structure compilable; it is not a result figure.}
+\label{fig:pipeline}
+\end{figure}
+
+\section{Related Work}
+
+\textbf{Semantic Dynamic SLAM.} Semantic dynamic-SLAM methods identify potentially movable object classes and remove their observations from estimation \citep{dynaslam,dgs,ji2021}. This strategy is effective when the detector covers the dynamic category, but it can discard static regions of a semantically movable object and cannot by itself recognize an unseen moving box. DT-SLAM uses semantic masks as high-recall evidence for the configured \texttt{person} class and complements them with category-independent geometry.
+
+\textbf{Geometry-Based Dynamic-Region Detection.} Existing geometry-based methods exploit multi-view depth inconsistency, dense reconstruction residuals, optical flow, or point and region consistency \citep{refusion,detectfusion,flowfusion,ji2021}. SInDSLAM uses geometric re-clustering and optical-flow residuals to avoid semantic dependence \citep{sindslam}. We build on this region-level motivation, while explicitly distinguishing our gradient-only RAG approximation from the full original re-clustering and mapping design.
+
+\textbf{Dynamic Mapping.} Dynamic observations can persist in a map even after they leave the scene. Probabilistic occupancy mapping uses both occupied and free-space observations to update a voxel belief \citep{octomap}. DT-SLAM outputs filtered depth for controlled mapping comparisons; temporal support and OctoMap are evaluated here as fixed-trajectory offline analyses rather than as parts of the online localization system.
+
+\section{Method}
+
+In this section, we describe DT-SLAM, an RGB-D ORB-SLAM2 extension that suppresses semantic and region-geometric dynamic observations before they contaminate tracking and mapping. The system has a semantic branch, a category-independent region-geometry branch, and an ORB-SLAM2 integration layer.
+
+\subsection{Overview and Coordinate Alignment}
+
+All masks, registered depth, ORB keypoints, and optical-flow fields are represented in one pixel domain. For a pixel $\mathbf{u}=(u,v)$ with metric depth $z$, its back-projected point is
+\begin{equation}
+\mathbf{X}=\left[(u-c_x)z/f_x,\;(v-c_y)z/f_y,\;z\right]^\top.
+\label{eq:backproject}
+\end{equation}
+This alignment is required before an ORB observation can be associated with either dynamic mask. TUM and Gazebo inputs use their pinhole domains; Bonn RGB and registered depth are jointly remapped to an undistorted pinhole domain.
+
+\subsection{Synchronous Semantic Masking}
+
+The semantic branch uses YOLOv8n-seg \citep{yolov8} through ONNX Runtime CUDA inference. It retains only COCO \texttt{person} detections, with a confidence threshold of 0.5 and an NMS threshold of 0.45. Rather than removing a detection rectangle, DT-SLAM decodes prototype masks, removes letterbox padding, restores the unified image domain, and constrains the result by the detection box. Tracking waits for the same-frame mask, so the semantic mask age is zero.
+
+For ORB feature $i$ at pixel $\mathbf{u}_i$, the semantic state is
+\begin{equation}
+d_{i,t}^{\mathrm{sem}}=\mathbb{1}\left[M_t^{\mathrm{sem}}(\mathbf{u}_i)\neq0\right].
+\end{equation}
+This branch handles a configured category rather than motion itself; it does not detect boxes, balloons, or other unconfigured objects.
+
+\subsection{SInDSLAM-Style Region Geometry}
+
+The region-geometric branch estimates category-independent motion evidence. First, valid depth pixels ($0<z<6$~m) are back-projected and partitioned by 3-D K-means. The number of initial clusters is $K=\operatorname{round}(wh/25600)$, which is 12 at $640\times480$. A four-level depth pyramid and previous-frame labels stabilize this initial partition. Importantly, these clusters are not treated as objects or as dynamic labels.
+
+Second, DT-SLAM splits clusters at depth discontinuities. A pixel is considered a depth-boundary candidate when the local depth change exceeds
+\begin{equation}
+\tau_D(\mathbf{u})=\max(0.025D(\mathbf{u}),0.08\;\mathrm{m}).
+\end{equation}
+The resulting fragments are merged with a region adjacency graph using spatial adjacency, initial-cluster boundaries, depth-histogram similarity, center-depth differences, and region area. The result is a geometric support region for motion evidence. The current implementation is gradient-only: it does not claim the PEAC/AHC planar boundaries of the original SInDSLAM implementation \citep{sindslam}.
+
+Third, the system computes dense observed flow with CPU DeepFlow \citep{deepflow} at 0.6 image scale, followed by variational refinement. The usual reference is frame $t-2$, with fallback to $t-1$ under large inter-frame motion. A global homography is robustly estimated from sampled flow correspondences to approximate image motion induced by the camera. The residual is
+\begin{equation}
+\delta(\mathbf{u}_t)=\left\|\mathbf{u}^{\mathrm{flow}}_r-\widehat{\mathbf{u}}^H_r\right\|_2,
+\end{equation}
+where $\mathbf{u}^{\mathrm{flow}}_r$ is the observed destination and $\widehat{\mathbf{u}}^H_r$ is the homography prediction. Intuitively, a large residual is evidence that a pixel does not follow the dominant background motion, but it can also arise from parallax, occlusion, or flow failure.
+
+Finally, Otsu and Triangle thresholds provide low and high residual support. Within each RAG region, DT-SLAM requires at least 100 high-residual pixels and checks contour area and circularity. It then uses region-constrained flood fill through intermediate residual support: if the filled portion exceeds 50\% of the region, the full region is marked dynamic; otherwise only the local portion is retained. A $9\times9$ dilation is applied before intersecting the mask with valid depth. Thus the branch represents \texttt{dynamic}, \texttt{static}, and \texttt{unknown} states; unavailable depth, flow, or region evidence is not silently treated as static.
+
+\subsection{ORB-SLAM2 Integration and Fail-Open Tracking}
+
+In the joint mode, DT-SLAM marks a feature dynamic when
+\begin{equation}
+d_{i,t}^{\mathrm{dyn}}=d_{i,t}^{\mathrm{sem}}\lor d_{i,t}^{\mathrm{geo}}.
+\end{equation}
+Dynamic feature indices are skipped by BoW, projection, and keyframe matching. Residual dynamic MapPoint associations are cleared before the original pose optimization, and dynamic features are rejected during RGB-D initialization, keyframe insertion, and LocalMapping MapPoint creation. We do not modify \texttt{Optimizer.cc}, introduce a third pose optimization, or perform object-level bundle adjustment.
+
+Geometry filtering can remove too many correspondences under strong occlusion. If filtering makes the native ORB-SLAM2 minimum matching condition unattainable, DT-SLAM temporarily restores only the geometry-filtered tracking candidates and rematches. Semantic exclusions remain active, and geometric candidates remain vetoed for mapping after tracking. This fail-open operation is a localization safety mechanism; it is not evidence that the restored candidates are static.
+
+\subsection{Static-Depth Output}
+
+For mapping comparisons, the system produces a filtered depth copy
+\begin{equation}
+D_t^{\mathrm{static}}(\mathbf{u})=
+\begin{cases}
+0, & M_t^{\mathrm{depth}}(\mathbf{u})=1,\\
+D_t(\mathbf{u}), & \text{otherwise}.
+\end{cases}
+\end{equation}
+Tracking continues to consume raw depth. This separation permits mapping comparisons on a fixed pose trajectory without conflating map differences with changed localization.
+
+\section{Experiments}
+
+The goal of our evaluation is to test whether semantic and region-geometric evidence improve localization in their respective supported settings, and to characterize the limitations of the combined system. We ask: (1) does person masking improve localization in a dynamic-person sequence? (2) can region geometry protect localization from a category-unknown moving box? (3) can fail-open preserve tracking under strong occlusion? and (4) what do fixed-trajectory mapping analyses reveal about residual dynamic artifacts?
+
+We compare four modes where applicable: ORB-SLAM2 only, semantic only, geometry only, and semantic plus geometry. We use absolute trajectory error (ATE) RMSE and relative pose error (RPE) RMSE, both in meters and lower is better. Repeated results are reported as medians; one-run multi-sequence results are explicitly treated as scope checks rather than statistical evidence.
+
+\subsection{Known-Person Dynamics}
+
+Table~\ref{tab:tum} reports three-run median results on TUM \texttt{fr3/walking\_xyz}. Semantic masking reduces ATE from $0.730574$~m to $0.016477$~m and RPE from $0.025407$~m to $0.011876$~m. We find that synchronous pixel-level person masks provide strong localization protection for this configured dynamic-person sequence. This result does not establish performance for other semantic categories or for every low-dynamic scene.
+
+\begin{table}[t]
+\centering
+\caption{TUM \texttt{fr3/walking\_xyz} three-run median localization results. Lower is better.}
+\label{tab:tum}
+\begin{tabular}{lcc}
+\toprule
+Method & ATE RMSE (m)$\downarrow$ & RPE RMSE (m)$\downarrow$\\
+\midrule
+ORB-SLAM2 & 0.730574 & 0.025407\\
+Semantic masking & \textbf{0.016477} & \textbf{0.011876}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Category-Unknown Moving Box}
+
+To isolate the effect of geometry on Bonn \texttt{moving\_nonobstructing\_box}, the detector runs in both conditions; the only controlled difference is whether its mask enters ORB-SLAM2. Table~\ref{tab:bonn} shows that enabling S2 region-geometric filtering reduces the three-run median ATE from $0.514344$~m to $0.022526$~m and retains all 778 poses. We find repeatable localization benefit on this unknown-object sequence, while avoiding the stronger claim that the detector solves arbitrary unknown-object motion.
+
+\begin{table}[t]
+\centering
+\caption{Bonn \texttt{moving\_nonobstructing\_box} three-run median results. The detector runs in both modes; only mask use in SLAM differs.}
+\label{tab:bonn}
+\begin{tabular}{lccc}
+\toprule
+Method & ATE (m)$\downarrow$ & RPE (m)$\downarrow$ & Poses\\
+\midrule
+Geometry computed, not used & 0.514344 & 0.022127 & 778/778\\
+S2 region geometry & \textbf{0.022526} & \textbf{0.014381} & 778/778\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Strong Occlusion and Fail-Open}
+
+On Bonn \texttt{moving\_obstructing\_box}, an earlier filtering rule lost 200 frames after over-filtering. The current S2 fail-open variant produces 589 valid poses with one fail-open activation, compared with 589 poses when filtering is disabled. Its ATE is $0.245857$~m versus $0.546996$~m for geometry-off. The older $0.177218$~m value was computed on a truncated trajectory and is therefore not directly comparable. This analysis shows that fail-open restores observability, not that it improves pixelwise dynamic classification.
+
+\subsection{Scope Checks and Runtime}
+
+Single-run checks over six TUM and Bonn sequences found no catastrophic localization regression in the evaluated static and low-dynamic sequences, but the semantic-or-geometry union was not consistently best. In AWS Small House, semantic-only mode yielded the best single-run ATE/RPE, while geometry increased trajectory coverage but reduced speed to 4.38--4.57 FPS. CPU DeepFlow is the dominant cost (about 156 ms/frame); the current region-geometry path therefore runs at roughly 3.2--4.6 FPS and is not real-time.
+
+\section{Fixed-Trajectory Mapping Analysis}
+
+Framewise dynamic-depth masking can reduce observations of a moving object without guaranteeing removal of its historical map trace. We therefore compare mapping methods using a fixed trajectory and identical depth sampling. On AWS Small House, direct S3 accumulation retains 96.35\% of the box-residual proxy, whereas an at-least-eight-frame temporal support rule combined with S3 retains 8.38\% while preserving a 98.17\% structure proxy. Here eight means support from eight distinct sampled frames, not eight consecutive static frames.
+
+OctoMap-style occupancy fusion \citep{octomap} instead relies on later free-space rays to contradict old occupied voxels. In the AWS trajectory, only 5.80\% of old box voxels receive such a revisit after the last box observation; S3 plus OctoMap retains 36.31\% of the ghost proxy. Thus the strongest AWS cleanup in this analysis comes from temporal support rather than the current S3 detector or OctoMap alone. These mapping results are offline fixed-trajectory analyses and are not claims of an online long-term static map.
+
+\section{Limitations and Conclusion}
+
+We presented DT-SLAM, which combines synchronous YOLOv8 person masks with SInDSLAM-style region geometry in RGB-D ORB-SLAM2. Repeated experiments show strong semantic benefit on TUM \texttt{fr3/walking\_xyz} and strong region-geometric benefit on one Bonn category-unknown moving-box sequence. The fail-open safeguard further preserves a complete trajectory under strong occlusion.
+
+The current geometry branch is neither a complete SInDSLAM reproduction nor a universally reliable category-independent detector: its benefit depends on scene motion, depth boundaries, and optical-flow quality, and its CPU flow backend is slow. Future work could replace the present hard mask decision with uncertainty-aware motion evidence and accelerate dense motion estimation. Likewise, the current mapping study is offline and fixed-trajectory; future work could integrate temporal support or probabilistic occupancy updates online while explicitly modeling the conditions needed for free-space revisits.
+
+\paragraph{Draft status.} This is a content-first initial manuscript. The target venue, official LaTeX class, author block, figures, exhaustive related-work coverage, and final citation verification remain to be completed.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+\end{document}
